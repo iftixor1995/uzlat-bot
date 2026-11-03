@@ -63,6 +63,12 @@ from bot.translit import convert, convert_chars, TUTUQ
     # --- mixed, punctuation, numbers
     ("Салом, dunyo! 2026-yil.", "Salom, dunyo! 2026-yil."),
     ("'salom'", "'salom'"),          # quotes stay quotes
+    # --- links / e-mails / handles untouched
+    ("ko'ring: https://youtube.com/shorts/LXweJdqKlNs?si=ix1", "köring: https://youtube.com/shorts/LXweJdqKlNs?si=ix1"),
+    ("yozing shahar@mail.uz ga", "yozing shahar@mail.uz ga"),
+    ("bot: @new_aplhabet_bot shu", "bot: @new_aplhabet_bot şu"),
+    ("sayt kun.uz/news/shahar", "sayt kun.uz/news/shahar"),
+    ("www.shahar.uz chiroyli", "www.shahar.uz çiroyli"),
 ])
 def test_convert(src, expected):
     assert convert(src) == expected

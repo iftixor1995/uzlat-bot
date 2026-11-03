@@ -50,6 +50,15 @@ def _load_exceptions() -> dict[str, str]:
 EXCEPTIONS = _load_exceptions()
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
+# URLs, e-mails, @handles, file names — never transliterated
+_PROTECTED_RE = re.compile(
+    r"(?:https?://|ftp://|www\.)\S+"                       # http://..., www....
+    r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+"                        # e-mail
+    r"|(?<![\w@])@[A-Za-z0-9_]{3,}"                          # @telegram_handle
+    r"|\b[\w-]+(?:\.[\w-]+)*\.(?:uz|com|org|net|ru|io|info|edu|gov|tj|kz)(?:/\S*)?",  # domain.uz/...
+    re.UNICODE,
+)
+
 # ---------------------------------------------------------------- compounds
 _CMP_PATH = Path(__file__).with_name("compounds.json")
 
@@ -175,12 +184,18 @@ def convert_chars(text: str, mode: str = MODE_AUTO) -> list[str]:
     do_cyr = mode in (MODE_AUTO, MODE_CYR)
     do_lat = mode in (MODE_AUTO, MODE_LAT)
 
+    # 0. protected spans (links, e-mails, handles) are copied verbatim
+    for m in _PROTECTED_RE.finditer(text):
+        for k in range(m.start(), m.end()):
+            out[k] = text[k]
+            done[k] = True
+
     # 1. whole-word exceptions (sentabr, oktabr, ...)
     if EXCEPTIONS:
         for m in _WORD_RE.finditer(text):
             w = m.group()
             repl = EXCEPTIONS.get(w.lower())
-            if repl is None:
+            if repl is None or done[m.start()]:
                 continue
             if _has_cyr(w) and not do_cyr or not _has_cyr(w) and not do_lat:
                 continue

@@ -4,7 +4,7 @@ and returns the list of produced files.
 
   .txt   -> .txt
   .docx  -> .docx   (all formatting kept: runs, tables, headers/footers, text boxes)
-  .pdf   -> .docx + .txt + .pdf   (text is extracted; layout is not preserved)
+  .pdf   -> .pdf (in place: images, layout, fonts kept; only text glyphs replaced) + .txt
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
+from .pdf_inplace import convert_pdf_inplace
 from .translit import MODE_AUTO, convert, convert_chars
 
 SUPPORTED = {".txt", ".docx", ".pdf"}
@@ -155,16 +156,18 @@ def _write_docx(pages: list[str], dst: Path) -> None:
 
 
 def convert_pdf(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
-    pages = [convert(p, mode) for p in _pdf_pages(src)]
+    pages = _pdf_pages(src)
     if not any(p.strip() for p in pages):
         raise ValueError("PDF ichida matn topilmadi (skan qilingan bo'lishi mumkin).")
-    out_txt = out_dir / _out_name(src, ".txt")
-    out_txt.write_text("\n\n".join(pages), encoding="utf-8")
-    out_docx = out_dir / _out_name(src, ".docx")
-    _write_docx(pages, out_docx)
     out_pdf = out_dir / _out_name(src, ".pdf")
-    _write_pdf(pages, out_pdf)
-    return [out_docx, out_pdf, out_txt]
+    try:
+        convert_pdf_inplace(src, out_pdf, mode)
+    except Exception:
+        # fallback: rebuild a plain PDF from extracted text
+        _write_pdf([convert(p, mode) for p in pages], out_pdf)
+    out_txt = out_dir / _out_name(src, ".txt")
+    out_txt.write_text("\n\n".join(convert(p, mode) for p in pages), encoding="utf-8")
+    return [out_pdf, out_txt]
 
 
 # ------------------------------------------------------------------ dispatch

@@ -8,7 +8,7 @@ Telegram bot: kirill yoki eski lotin (1995) yozuvidagi matn va fayllarni
 | Oddiy xabar (matn) | Matn (4096 belgidan uzun bo'lsa — .txt fayl) |
 | `.txt` | `.txt` |
 | `.docx` | `.docx` — formatlash (shrift, qalin/kursiv, jadval, sarlavha, kolontitul, izoh) to'liq saqlanadi |
-| `.pdf` | `.docx` + `.pdf` + `.txt` (matn olinadi; sahifa joylashuvi saqlanmaydi; skan PDF ishlamaydi) |
+| `.pdf` | `.pdf` + `.txt` — PDF **joyida** o'giriladi: rasmlar, sahifa tartibi, shrift o'lchami, rang, qalin/kursiv saqlanadi; faqat o'zgargan so'zlarning harflari almashtiriladi (Times New Roman → Liberation Serif, Arial → Liberation Sans — bir xil o'lchamli shriftlar). Skan PDF ishlamaydi |
 
 ## Ishga tushirish
 
@@ -83,6 +83,7 @@ python -m pytest tests -q
 ```
 bot/translit.py     — alifbo qoidalari (char-by-char mapping, formatlashni saqlash uchun)
 bot/documents.py    — txt / docx / pdf konvertorlar
+bot/pdf_inplace.py  — PDF'ni joyida o'girish (PyMuPDF)
 bot/main.py         — aiogram 3 bot
 bot/exceptions.json — istisno so'zlar lug'ati
 bot/compounds.json  — qisqartma bo'laklari va е-o'zaklar
