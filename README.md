@@ -25,6 +25,13 @@ pip install -r requirements.txt
 BOT_TOKEN=... python -m bot.main
 ```
 
+### Vercel (tavsiya — tekin, webhook rejimi)
+1. vercel.com → Add New → Project → shu GitHub repo'ni import qiling (Framework: Other).
+2. Environment Variables: `BOT_TOKEN`, `WEBHOOK_SECRET` (istalgan tasodifiy satr).
+3. (ixtiyoriy) Storage → Upstash Redis ulang — tanlangan rejim eslab qolinadi va takroriy update'lar tashlanadi.
+4. Deploy → saytning asosiy manzilini brauzerda oching (`https://<loyiha>.vercel.app/`) — webhook o'zi ro'yxatdan o'tadi, `{"ok": true, ...}` qaytadi.
+Kirish nuqtasi: `api/index.py` (ASGI), sozlamalar: `vercel.json`. Polling uchun `python -m bot.main` ham ishlayveradi.
+
 ### HOKAS (hokas.net) va shunga o'xshash Python hostinglar
 Docker shart emas. Loyiha papkasini yuklang, so'ng:
 - Start command: `python -m bot.main`  (yoki `bash run.sh`)
@@ -84,7 +91,9 @@ python -m pytest tests -q
 bot/translit.py     — alifbo qoidalari (char-by-char mapping, formatlashni saqlash uchun)
 bot/documents.py    — txt / docx / pdf konvertorlar
 bot/pdf_inplace.py  — PDF'ni joyida o'girish (PyMuPDF)
-bot/main.py         — aiogram 3 bot
+bot/main.py         — aiogram 3 bot (handlers + polling)
+bot/storage.py      — rejim xotirasi (Upstash Redis yoki RAM)
+api/index.py        — Vercel webhook kirish nuqtasi
 bot/exceptions.json — istisno so'zlar lug'ati
 bot/compounds.json  — qisqartma bo'laklari va е-o'zaklar
 tests/              — 56 ta test

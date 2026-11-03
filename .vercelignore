@@ -1,0 +1,8 @@
+tests/
+Dockerfile
+docker-compose.yml
+Procfile
+run.sh
+.env
+.env.example
+*.md

@@ -26,6 +26,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from . import storage
 from .documents import SUPPORTED, convert_file
 from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, convert
 
@@ -52,11 +53,13 @@ BTN_HELP = "ℹ️ Yordam"
 _LABEL_TO_MODE = {v: k for k, v in MODE_LABELS.items()}
 _LABEL_TO_MODE.update({f"✅ {v}": k for k, v in MODE_LABELS.items()})
 
-_user_mode: dict[int, str] = {}          # chat_id -> mode (in-memory; default AUTO)
+async def get_mode(chat_id: int) -> str:
+    mode = await storage.get(f"mode:{chat_id}")
+    return mode if mode in MODE_LABELS else MODE_AUTO
 
 
-def get_mode(chat_id: int) -> str:
-    return _user_mode.get(chat_id, MODE_AUTO)
+async def set_mode(chat_id: int, mode: str) -> None:
+    await storage.set(f"mode:{chat_id}", mode)
 
 
 def keyboard(active: str) -> ReplyKeyboardMarkup:
@@ -139,19 +142,19 @@ def welcome_text(first_name: str | None) -> str:
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     first = message.from_user.first_name if message.from_user else None
-    await message.answer(welcome_text(first), reply_markup=keyboard(get_mode(message.chat.id)))
+    await message.answer(welcome_text(first), reply_markup=keyboard(await get_mode(message.chat.id)))
 
 
 @router.message(Command("help"))
 @router.message(F.text == BTN_HELP)
 async def cmd_help(message: Message) -> None:
-    await message.answer(HELP, reply_markup=keyboard(get_mode(message.chat.id)))
+    await message.answer(HELP, reply_markup=keyboard(await get_mode(message.chat.id)))
 
 
 @router.message(F.text.in_(_LABEL_TO_MODE))
 async def on_mode(message: Message) -> None:
     mode = _LABEL_TO_MODE[message.text]
-    _user_mode[message.chat.id] = mode
+    await set_mode(message.chat.id, mode)
     await message.answer(
         f"Rejim: <b>{MODE_LABELS[mode]}</b>\n{MODE_HINT[mode]}",
         reply_markup=keyboard(mode),
@@ -163,7 +166,7 @@ async def on_document(message: Message, bot: Bot) -> None:
     doc = message.document
     name = doc.file_name or "file"
     ext = Path(name).suffix.lower()
-    mode = get_mode(message.chat.id)
+    mode = await get_mode(message.chat.id)
 
     if ext not in SUPPORTED:
         await message.reply(
@@ -208,7 +211,7 @@ async def on_document(message: Message, bot: Bot) -> None:
 
 @router.message(F.text)
 async def on_text(message: Message, bot: Bot) -> None:
-    mode = get_mode(message.chat.id)
+    mode = await get_mode(message.chat.id)
     if len(message.text) > 1500:
         await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     result = convert(message.text, mode)
@@ -229,19 +232,32 @@ async def on_other(message: Message) -> None:
     await message.reply("Matn yoki .txt / .docx / .pdf fayl yuboring. Yordam: /help")
 
 
-async def main() -> None:
-    token = os.environ.get("BOT_TOKEN")
+COMMANDS = [
+    BotCommand(command="start", description="Boshlash"),
+    BotCommand(command="help", description="Yordam va rejimlar"),
+]
+
+
+def make_bot(token: str | None = None) -> Bot:
+    token = token or os.environ.get("BOT_TOKEN")
     if not token:
         raise SystemExit("BOT_TOKEN env o'zgaruvchisi berilmagan")
-    bot = Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+
+def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(router)
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Boshlash"),
-        BotCommand(command="help", description="Yordam va rejimlar"),
-    ])
+    return dp
+
+
+async def main() -> None:
+    """Long-polling mode (local / Docker / VPS)."""
+    bot = make_bot()
+    dp = build_dispatcher()
+    await bot.set_my_commands(COMMANDS)
     await bot.delete_webhook(drop_pending_updates=False)
-    log.info("bot started")
+    log.info("bot started (polling)")
     await dp.start_polling(bot)
 
 
