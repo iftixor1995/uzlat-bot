@@ -6,9 +6,11 @@ Run:  BOT_TOKEN=... python -m bot.main
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -91,6 +93,31 @@ HELP = (
 )
 
 
+# --------------------------------------------------------------- progress helpers
+async def _keep_action(bot: Bot, chat_id: int, action: ChatAction, stop: asyncio.Event) -> None:
+    """Telegram shows a chat action for ~5s; re-send it until the job is done."""
+    while not stop.is_set():
+        with contextlib.suppress(Exception):
+            await bot.send_chat_action(chat_id, action)
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(stop.wait(), timeout=4)
+
+
+@contextlib.asynccontextmanager
+async def working(bot: Bot, chat_id: int, action: ChatAction = ChatAction.UPLOAD_DOCUMENT):
+    stop = asyncio.Event()
+    task = asyncio.create_task(_keep_action(bot, chat_id, action, stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        with contextlib.suppress(Exception):
+            await task
+
+
+_FMT_LABEL = {".docx": "Word", ".pdf": "PDF", ".txt": "matn"}
+
+
 # --------------------------------------------------------------- handlers
 def welcome_text(first_name: str | None) -> str:
     name = f" {first_name}" if first_name else ""
@@ -148,30 +175,42 @@ async def on_document(message: Message, bot: Bot) -> None:
         await message.reply(f"Fayl juda katta. Chegara — {MAX_FILE_MB} MB.")
         return
 
-    await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_DOCUMENT)
+    size_kb = (doc.file_size or 0) // 1024
+    status = await message.reply(
+        f"⏳ <b>{name}</b> qabul qilindi ({size_kb} KB).\n"
+        f"{_FMT_LABEL.get(ext, ext)} fayl o'girilyapti — rejim: <b>{MODE_LABELS[mode]}</b>…"
+    )
+    started = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         src = tmp_dir / name
         try:
-            await bot.download(doc, destination=src)
-            outputs = await asyncio.to_thread(convert_file, src, tmp_dir, mode)
+            async with working(bot, message.chat.id):
+                await bot.download(doc, destination=src)
+                outputs = await asyncio.to_thread(convert_file, src, tmp_dir, mode)
         except ValueError as e:
-            await message.reply(str(e))
+            await status.edit_text(f"⚠️ {e}")
             return
         except Exception:
             log.exception("convert failed: %s", name)
-            await message.reply("Faylni o'girishda xatolik. Fayl buzilmaganini tekshirib, qayta yuboring.")
+            await status.edit_text("❌ Faylni o'girishda xatolik. Fayl buzilmaganini tekshirib, qayta yuboring.")
             return
 
-        caption = f"Yangi alifboda ✅  ·  {MODE_LABELS[mode]}"
-        for i, out in enumerate(outputs):
-            await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None)
+        async with working(bot, message.chat.id):
+            caption = f"Yangi alifboda ✅  ·  {MODE_LABELS[mode]}"
+            for i, out in enumerate(outputs):
+                await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None)
+    elapsed = time.monotonic() - started
+    with contextlib.suppress(Exception):
+        await status.edit_text(f"✅ Tayyor — {elapsed:.1f} s.")
     log.info("converted %s (%s, %s) for %s", name, ext, mode, message.from_user.id if message.from_user else "?")
 
 
 @router.message(F.text)
-async def on_text(message: Message) -> None:
+async def on_text(message: Message, bot: Bot) -> None:
     mode = get_mode(message.chat.id)
+    if len(message.text) > 1500:
+        await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     result = convert(message.text, mode)
     if result == message.text:
         await message.reply("Bu matnda o'giradigan narsa yo'q — allaqachon yangi alifboda ✅")
