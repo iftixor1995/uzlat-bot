@@ -8,7 +8,7 @@ Telegram bot: kirill yoki eski lotin (1995) yozuvidagi matn va fayllarni
 | Oddiy xabar (matn) | Matn (4096 belgidan uzun bo'lsa — .txt fayl) |
 | `.txt` | `.txt` |
 | `.docx` | `.docx` — formatlash (shrift, qalin/kursiv, jadval, sarlavha, kolontitul, izoh) to'liq saqlanadi |
-| `.pdf` | `.pdf` + `.txt` — PDF **joyida** o'giriladi: rasmlar, sahifa tartibi, shrift o'lchami, rang, qalin/kursiv saqlanadi; faqat o'zgargan so'zlarning harflari almashtiriladi (Times New Roman → Liberation Serif, Arial → Liberation Sans — bir xil o'lchamli shriftlar). Skan PDF ishlamaydi |
+| `.pdf` | `.pdf` + `.docx` — PDF **joyida** o'giriladi (rasm, tartib, shrift, rang saqlanadi; Times → Liberation Serif, Arial → Liberation Sans). Word nusxasi `pdf2docx` bilan rasmlar va jadvallar saqlangan holda yasalib, keyin o'giriladi. Skan PDF ishlamaydi |
 
 ## Ishga tushirish
 

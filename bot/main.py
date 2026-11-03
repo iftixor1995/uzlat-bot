@@ -84,7 +84,7 @@ HELP = (
     "(4096 belgidan uzun bo'lsa — .txt fayl).\n\n"
     "📄 <b>Fayl</b> (20 MB gacha):\n"
     "  • <b>.docx</b> — formatlash to'liq saqlanadi\n"
-    "  • <b>.pdf</b> — joyida o'giriladi: rasm, tartib, shrift saqlanadi\n"
+    "  • <b>.pdf</b> — PDF + Word qaytadi, ikkalasida ham rasm va tartib saqlanadi\n"
     "  • <b>.txt</b> — .txt qaytadi\n\n"
     "🔤 <b>Alifbo</b> — 2026-yil 21-oktabrdagi qonun (28 harf + tutuq belgisi ʼ): "
     "oʻ→ö, gʻ→ğ, sh→ş, ch→ç.\n\n"

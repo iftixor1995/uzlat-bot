@@ -4,10 +4,12 @@ and returns the list of produced files.
 
   .txt   -> .txt
   .docx  -> .docx   (all formatting kept: runs, tables, headers/footers, text boxes)
-  .pdf   -> .pdf (in place: images, layout, fonts kept; only text glyphs replaced) + .txt
+  .pdf   -> .pdf (in place: images, layout, fonts kept; only text glyphs replaced)
+            + .docx (pdf2docx keeps images/tables/layout, then transliterated run-by-run)
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pdfplumber
@@ -155,19 +157,48 @@ def _write_docx(pages: list[str], dst: Path) -> None:
     doc.save(str(dst))
 
 
+def _pdf_to_docx(src: Path, work_dir: Path) -> Path:
+    """PDF -> editable DOCX with images and layout (pdf2docx)."""
+    import logging as _logging
+
+    from pdf2docx import Converter
+
+    raw = work_dir / f"{src.stem}.docx"
+    _logging.disable(_logging.INFO)          # pdf2docx logs every page at INFO
+    try:
+        cv = Converter(str(src))
+        try:
+            cv.convert(str(raw), multi_processing=False)
+        finally:
+            cv.close()
+    finally:
+        _logging.disable(_logging.NOTSET)
+    return raw
+
+
 def convert_pdf(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
     pages = _pdf_pages(src)
     if not any(p.strip() for p in pages):
         raise ValueError("PDF ichida matn topilmadi (skan qilingan bo'lishi mumkin).")
+
     out_pdf = out_dir / _out_name(src, ".pdf")
     try:
         convert_pdf_inplace(src, out_pdf, mode)
     except Exception:
-        # fallback: rebuild a plain PDF from extracted text
+        logging.getLogger("uzlat-bot").exception("in-place PDF failed, using text fallback")
         _write_pdf([convert(p, mode) for p in pages], out_pdf)
-    out_txt = out_dir / _out_name(src, ".txt")
-    out_txt.write_text("\n\n".join(convert(p, mode) for p in pages), encoding="utf-8")
-    return [out_pdf, out_txt]
+
+    out_docx = out_dir / _out_name(src, ".docx")
+    work = out_dir / "_pdf2docx"
+    work.mkdir(exist_ok=True)
+    try:
+        raw = _pdf_to_docx(src, work)
+        produced = convert_docx(raw, work, mode)[0]
+        produced.replace(out_docx)
+    except Exception:
+        logging.getLogger("uzlat-bot").exception("pdf2docx failed, using text fallback")
+        _write_docx([convert(p, mode) for p in pages], out_docx)   # text-only fallback
+    return [out_pdf, out_docx]
 
 
 # ------------------------------------------------------------------ dispatch
