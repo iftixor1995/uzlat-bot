@@ -76,8 +76,8 @@ async def _setup() -> dict:
                 url, secret_token=SECRET or None,
                 allowed_updates=["message"], drop_pending_updates=False,
             )
-            await bot.set_my_commands(COMMANDS)
             changed = True
+        await bot.set_my_commands(COMMANDS)
         me = await bot.get_me()
         return {"ok": True, "bot": f"@{me.username}", "webhook": url,
                 "webhook_changed": changed, "redis": storage.enabled()}

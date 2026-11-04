@@ -80,6 +80,11 @@ Yangi so'z qo'shish uchun shu faylga yozib, botni qayta ishga tushiring.
 > (qonun 2026-yil 21-oktabrda qabul qilindi, 6 oydan keyin kuchga kiradi).
 > Chiqqanda `translit.py` dagi 4–5 ta kontekst qoidasini moslash kifoya.
 
+## /start statistikasi (Google Sheet)
+`apps_script/Code.gs` ni sheet'ning Extensions → Apps Script'iga qo'ying, `SECRET` ni almashtiring,
+Deploy → Web app (Execute as: Me, Access: Anyone). Vercel'ga `SHEETS_WEBHOOK_URL` (…/exec) va
+`SHEETS_WEBHOOK_SECRET` qo'shing. Sheet o'zi private qoladi.
+
 ## Test
 ```bash
 pip install pytest

@@ -16,7 +16,7 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatAction, ParseMode
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
     BufferedInputFile,
@@ -26,7 +26,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-from . import storage
+from . import analytics, storage
 from .documents import SUPPORTED, convert_file
 from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, convert
 
@@ -50,6 +50,14 @@ MODE_HINT = {
     MODE_AUTO: "Kirill ham, eski lotin ham — hammasi yangi alifboga o'giriladi.",
 }
 BTN_HELP = "ℹ️ Yordam"
+BTN_CONTACT = "✉️ Taklif va murojaat"
+CONTACTS = ("@Ixtiyorivich", "@KozimTN")
+CONTACT_TEXT = (
+    "✉️ <b>Taklif va murojaatlar</b>\n\n"
+    "Botni rivojlantirish bo'yicha taklif, xato haqida xabar yoki "
+    "hamkorlik uchun murojaat qiling:\n\n"
+    + "\n".join(f"• {c}" for c in CONTACTS)
+)
 _LABEL_TO_MODE = {v: k for k, v in MODE_LABELS.items()}
 _LABEL_TO_MODE.update({f"✅ {v}": k for k, v in MODE_LABELS.items()})
 
@@ -71,6 +79,7 @@ def keyboard(active: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [btn(MODE_CYR), btn(MODE_LAT)],
             [btn(MODE_AUTO), KeyboardButton(text=BTN_HELP)],
+            [KeyboardButton(text=BTN_CONTACT)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -140,9 +149,16 @@ def welcome_text(first_name: str | None) -> str:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, command: CommandObject) -> None:
     first = message.from_user.first_name if message.from_user else None
     await message.answer(welcome_text(first), reply_markup=keyboard(await get_mode(message.chat.id)))
+    await analytics.log_start(message, command.args)
+
+
+@router.message(Command("contact"))
+@router.message(F.text == BTN_CONTACT)
+async def cmd_contact(message: Message) -> None:
+    await message.answer(CONTACT_TEXT, reply_markup=keyboard(await get_mode(message.chat.id)))
 
 
 @router.message(Command("help"))
@@ -235,6 +251,7 @@ async def on_other(message: Message) -> None:
 COMMANDS = [
     BotCommand(command="start", description="Boshlash"),
     BotCommand(command="help", description="Yordam va rejimlar"),
+    BotCommand(command="contact", description="Taklif va murojaat"),
 ]
 
 
