@@ -182,7 +182,7 @@ def _pdf_to_docx(src: Path, work_dir: Path) -> Path:
 def convert_pdf(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
     pages = _pdf_pages(src)
     if not any(p.strip() for p in pages):
-        raise ValueError("PDF ichida matn topilmadi (skan qilingan bo'lishi mumkin).")
+        raise ValueError("PDF içida matn topilmadi (skan qilingan bölişi mumkin).")
 
     out_pdf = out_dir / _out_name(src, ".pdf")
     try:
@@ -221,4 +221,4 @@ def convert_file(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
         dst = out_dir / _out_name(src, ".pptx")
         convert_pptx_inplace(src, dst, mode)
         return [dst]
-    raise ValueError(f"Qo'llab-quvvatlanmaydigan format: {ext}")
+    raise ValueError(f"Qöllab-quvvatlanmaydigan format: {ext}")

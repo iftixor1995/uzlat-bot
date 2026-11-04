@@ -42,24 +42,28 @@ router = Router()
 MODE_LABELS = {
     MODE_CYR: "Кирилл → Özbek",
     MODE_LAT: "Oʻzbek → Özbek",
-    MODE_AUTO: "Avto (aralash)",
+    MODE_AUTO: "Avto (aralaş)",
 }
 MODE_HINT = {
-    MODE_CYR: "Faqat kirill harflari o'giriladi, lotincha matn tegilmaydi.",
-    MODE_LAT: "Faqat eski lotin (oʻ gʻ sh ch) o'giriladi, kirill tegilmaydi.",
-    MODE_AUTO: "Kirill ham, eski lotin ham — hammasi yangi alifboga o'giriladi.",
+    MODE_CYR: "Faqat kirill harflari ögiriladi, lotinça matn tegilmaydi.",
+    MODE_LAT: "Faqat eski lotin (oʻ gʻ sh ch) ögiriladi, kirill tegilmaydi.",
+    MODE_AUTO: "Kirill ham, eski lotin ham — hammasi yangi alifboga ögiriladi.",
 }
 BTN_HELP = "ℹ️ Yordam"
 BTN_CONTACT = "✉️ Taklif va murojaat"
 CONTACTS = ("@Ixtiyorivich", "@KozimTN")
 CONTACT_TEXT = (
     "✉️ <b>Taklif va murojaatlar</b>\n\n"
-    "Botni rivojlantirish bo'yicha taklif, xato haqida xabar yoki "
-    "hamkorlik uchun murojaat qiling:\n\n"
+    "Botni rivojlantiriş böyiça taklif, xato haqida xabar yoki "
+    "hamkorlik uçun murojaat qiling:\n\n"
     + "\n".join(f"• {c}" for c in CONTACTS)
 )
 _LABEL_TO_MODE = {v: k for k, v in MODE_LABELS.items()}
 _LABEL_TO_MODE.update({f"✅ {v}": k for k, v in MODE_LABELS.items()})
+# labels from older keyboards still cached in users' clients
+for _old, _m in {"Avto (aralash)": MODE_AUTO}.items():
+    _LABEL_TO_MODE[_old] = _m
+    _LABEL_TO_MODE[f"✅ {_old}"] = _m
 
 async def get_mode(chat_id: int) -> str:
     mode = await storage.get(f"mode:{chat_id}")
@@ -88,11 +92,11 @@ def keyboard(active: str) -> ReplyKeyboardMarkup:
 
 
 HELP = (
-    "ℹ️ <b>Qanday ishlataman?</b>\n\n"
+    "ℹ️ <b>Qanday işlataman?</b>\n\n"
     "📝 <b>Matn</b> — xabar yozing, yangi alifboda qaytaraman "
-    "(4096 belgidan uzun bo'lsa — .txt fayl).\n\n"
-    "📄 <b>Fayl</b> (20 MB gacha):\n"
-    "  • <b>.docx</b> — formatlash to'liq saqlanadi\n"
+    "(4096 belgidan uzun bölsa — .txt fayl).\n\n"
+    "📄 <b>Fayl</b> (20 MB gaça):\n"
+    "  • <b>.docx</b> — formatlaş töliq saqlanadi\n"
     "  • <b>.pdf</b> — PDF + Word qaytadi, ikkalasida ham rasm va tartib saqlanadi\n"
     "  • <b>.xlsx</b> — Excel: formula, format, diagrammalar saqlanadi\n"
     "  • <b>.pptx</b> — PowerPoint: slaydlar dizayni saqlanadi\n"
@@ -138,15 +142,15 @@ def welcome_text(first_name: str | None) -> str:
     return (
         f"Assalomu alaykum,{name}! 👋\n\n"
         "Men <b>Yangi Alifbo</b> botiman — matn va hujjatlarni "
-        "2026-yilgi yangi o'zbek lotin alifbosiga (<b>Ö Ğ Ş Ç</b>) o'girib beraman.\n\n"
-        "📝 <b>Matn</b> yuboring — darhol o'girib qaytaraman.\n"
-        "📄 <b>Fayl</b> yuboring — Word, PDF, Excel, PowerPoint yoki .txt (20 MB gacha). "
-        "Word'da shrift, jadval, sarlavhalar o'z holicha qoladi.\n\n"
+        "2026-yilgi yangi özbek lotin alifbosiga (<b>Ö Ğ Ş Ç</b>) ögirib beraman.\n\n"
+        "📝 <b>Matn</b> yuboring — darhol ögirib qaytaraman.\n"
+        "📄 <b>Fayl</b> yuboring — Word, PDF, Excel, PowerPoint yoki .txt (20 MB gaça). "
+        "Word faylda şrift, jadval va sarlavhalar öz holiça qoladi.\n\n"
         "⚙️ Pastdagi tugmalar bilan rejimni tanlang:\n"
-        f"  • <b>{MODE_LABELS[MODE_CYR]}</b> — kirill matn uchun\n"
-        f"  • <b>{MODE_LABELS[MODE_LAT]}</b> — eski lotin (oʻ, gʻ, sh, ch) uchun\n"
-        f"  • <b>{MODE_LABELS[MODE_AUTO]}</b> — ikkalasi aralash bo'lsa\n\n"
-        "Sinab ko'ring: <code>Ўздаверлойиҳа</code> → <code>Özdavyerloyiha</code>"
+        f"  • <b>{MODE_LABELS[MODE_CYR]}</b> — kirill matn uçun\n"
+        f"  • <b>{MODE_LABELS[MODE_LAT]}</b> — eski lotin (oʻ, gʻ, sh, ch) uçun\n"
+        f"  • <b>{MODE_LABELS[MODE_AUTO]}</b> — ikkalasi aralaş bölsa\n\n"
+        "Sinab köring: <code>Ўздаверлойиҳа</code> → <code>Özdavyerloyiha</code>"
     )
 
 
@@ -189,23 +193,23 @@ async def on_document(message: Message, bot: Bot) -> None:
     if ext in {".xls", ".doc", ".ppt"}:
         await message.reply(
             f"<b>{ext}</b> — eski format. Faylni <b>{ext}x</b> qilib saqlab, qayta yuboring "
-            "(Fayl → Saqlash → formatni tanlash)."
+            "(Fayl → Saqlaş → formatni tanlaş)."
         )
         return
     if ext not in SUPPORTED:
         await message.reply(
             f"<b>{ext or 'bu'}</b> formatni qabul qilmayman. "
-            f"Qo'llab-quvvatlanadi: {', '.join(sorted(SUPPORTED))}"
+            f"Qöllab-quvvatlanadi: {', '.join(sorted(SUPPORTED))}"
         )
         return
     if doc.file_size and doc.file_size > MAX_FILE_MB * 1024 * 1024:
-        await message.reply(f"Fayl juda katta. Chegara — {MAX_FILE_MB} MB.")
+        await message.reply(f"Fayl juda katta. Çegara — {MAX_FILE_MB} MB.")
         return
 
     size_kb = (doc.file_size or 0) // 1024
     status = await message.reply(
         f"⏳ <b>{name}</b> qabul qilindi ({size_kb} KB).\n"
-        f"{_FMT_LABEL.get(ext, ext)} fayl o'girilyapti — rejim: <b>{MODE_LABELS[mode]}</b>…"
+        f"{_FMT_LABEL.get(ext, ext)} fayl ögirilyapti — rejim: <b>{MODE_LABELS[mode]}</b>…"
     )
     started = time.monotonic()
     with tempfile.TemporaryDirectory() as tmp:
@@ -220,7 +224,7 @@ async def on_document(message: Message, bot: Bot) -> None:
             return
         except Exception:
             log.exception("convert failed: %s", name)
-            await status.edit_text("❌ Faylni o'girishda xatolik. Fayl buzilmaganini tekshirib, qayta yuboring.")
+            await status.edit_text("❌ Faylni ögirişda xatolik. Fayl buzilmaganini tekşirib, qayta yuboring.")
             return
 
         async with working(bot, message.chat.id):
@@ -240,14 +244,14 @@ async def on_text(message: Message, bot: Bot) -> None:
         await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     result = convert(message.text, mode)
     if result == message.text:
-        await message.reply("Bu matnda o'giradigan narsa yo'q — allaqachon yangi alifboda ✅")
+        await message.reply("Bu matnda ögiradigan narsa yöq — allaqaçon yangi alifboda ✅")
         return
     if len(result) <= TG_TEXT_LIMIT:
         await message.reply(result, parse_mode=None)
     else:
         await message.reply_document(
             BufferedInputFile(result.encode("utf-8"), filename="yangi_alifbo.txt"),
-            caption="Matn uzun bo'lgani uchun fayl holida.",
+            caption="Matn uzun bölgani uçun fayl holida.",
         )
 
 
@@ -257,7 +261,7 @@ async def on_other(message: Message) -> None:
 
 
 COMMANDS = [
-    BotCommand(command="start", description="Boshlash"),
+    BotCommand(command="start", description="Boşlaş"),
     BotCommand(command="help", description="Yordam va rejimlar"),
     BotCommand(command="contact", description="Taklif va murojaat"),
 ]
@@ -266,7 +270,7 @@ COMMANDS = [
 def make_bot(token: str | None = None) -> Bot:
     token = token or os.environ.get("BOT_TOKEN")
     if not token:
-        raise SystemExit("BOT_TOKEN env o'zgaruvchisi berilmagan")
+        raise SystemExit("BOT_TOKEN env özgaruvçisi berilmagan")
     return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
