@@ -1,5 +1,5 @@
 """
-Telegram bot: converts any text / .txt / .docx / .pdf into the 2026 Uzbek Latin alphabet.
+Telegram bot: converts any text / .txt / .docx / .pdf / .xlsx / .pptx into the 2026 Uzbek Latin alphabet.
 
 Run:  BOT_TOKEN=... python -m bot.main
 """
@@ -94,6 +94,8 @@ HELP = (
     "📄 <b>Fayl</b> (20 MB gacha):\n"
     "  • <b>.docx</b> — formatlash to'liq saqlanadi\n"
     "  • <b>.pdf</b> — PDF + Word qaytadi, ikkalasida ham rasm va tartib saqlanadi\n"
+    "  • <b>.xlsx</b> — Excel: formula, format, diagrammalar saqlanadi\n"
+    "  • <b>.pptx</b> — PowerPoint: slaydlar dizayni saqlanadi\n"
     "  • <b>.txt</b> — .txt qaytadi\n\n"
     "🔤 <b>Alifbo</b> — 2026-yil 21-oktabrdagi qonun (28 harf + tutuq belgisi ʼ): "
     "oʻ→ö, gʻ→ğ, sh→ş, ch→ç.\n\n"
@@ -127,7 +129,7 @@ async def working(bot: Bot, chat_id: int, action: ChatAction = ChatAction.UPLOAD
             await task
 
 
-_FMT_LABEL = {".docx": "Word", ".pdf": "PDF", ".txt": "matn"}
+_FMT_LABEL = {".docx": "Word", ".pdf": "PDF", ".txt": "matn", ".xlsx": "Excel", ".pptx": "PowerPoint"}
 
 
 # --------------------------------------------------------------- handlers
@@ -138,7 +140,7 @@ def welcome_text(first_name: str | None) -> str:
         "Men <b>Yangi Alifbo</b> botiman — matn va hujjatlarni "
         "2026-yilgi yangi o'zbek lotin alifbosiga (<b>Ö Ğ Ş Ç</b>) o'girib beraman.\n\n"
         "📝 <b>Matn</b> yuboring — darhol o'girib qaytaraman.\n"
-        "📄 <b>Fayl</b> yuboring — .docx, .pdf yoki .txt (20 MB gacha). "
+        "📄 <b>Fayl</b> yuboring — Word, PDF, Excel, PowerPoint yoki .txt (20 MB gacha). "
         "Word'da shrift, jadval, sarlavhalar o'z holicha qoladi.\n\n"
         "⚙️ Pastdagi tugmalar bilan rejimni tanlang:\n"
         f"  • <b>{MODE_LABELS[MODE_CYR]}</b> — kirill matn uchun\n"
@@ -184,6 +186,12 @@ async def on_document(message: Message, bot: Bot) -> None:
     ext = Path(name).suffix.lower()
     mode = await get_mode(message.chat.id)
 
+    if ext in {".xls", ".doc", ".ppt"}:
+        await message.reply(
+            f"<b>{ext}</b> — eski format. Faylni <b>{ext}x</b> qilib saqlab, qayta yuboring "
+            "(Fayl → Saqlash → formatni tanlash)."
+        )
+        return
     if ext not in SUPPORTED:
         await message.reply(
             f"<b>{ext or 'bu'}</b> formatni qabul qilmayman. "
@@ -245,7 +253,7 @@ async def on_text(message: Message, bot: Bot) -> None:
 
 @router.message()
 async def on_other(message: Message) -> None:
-    await message.reply("Matn yoki .txt / .docx / .pdf fayl yuboring. Yordam: /help")
+    await message.reply("Matn yoki Word / PDF / Excel / PowerPoint / .txt fayl yuboring. Yordam: /help")
 
 
 COMMANDS = [

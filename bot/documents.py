@@ -3,6 +3,8 @@ File converters.  Every function takes an input path and an output directory
 and returns the list of produced files.
 
   .txt   -> .txt
+  .xlsx  -> .xlsx   (XML-level: formulas, styles, charts, images untouched)
+  .pptx  -> .pptx   (XML-level: slides, notes, charts, SmartArt text)
   .docx  -> .docx   (all formatting kept: runs, tables, headers/footers, text boxes)
   .pdf   -> .pdf (in place: images, layout, fonts kept; only text glyphs replaced)
             + .docx (pdf2docx keeps images/tables/layout, then transliterated run-by-run)
@@ -23,10 +25,11 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
+from .ooxml import convert_pptx_inplace, convert_xlsx_inplace
 from .pdf_inplace import convert_pdf_inplace
 from .translit import MODE_AUTO, convert, convert_chars
 
-SUPPORTED = {".txt", ".docx", ".pdf"}
+SUPPORTED = {".txt", ".docx", ".pdf", ".xlsx", ".pptx"}
 _FONT_CANDIDATES = [
     str(Path(__file__).with_name("fonts") / "DejaVuSans.ttf"),   # bundled — works on any host
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -210,4 +213,12 @@ def convert_file(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
         return convert_docx(src, out_dir, mode)
     if ext == ".pdf":
         return convert_pdf(src, out_dir, mode)
+    if ext == ".xlsx":
+        dst = out_dir / _out_name(src, ".xlsx")
+        convert_xlsx_inplace(src, dst, mode)
+        return [dst]
+    if ext == ".pptx":
+        dst = out_dir / _out_name(src, ".pptx")
+        convert_pptx_inplace(src, dst, mode)
+        return [dst]
     raise ValueError(f"Qo'llab-quvvatlanmaydigan format: {ext}")

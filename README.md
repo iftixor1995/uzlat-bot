@@ -8,6 +8,8 @@ Telegram bot: kirill yoki eski lotin (1995) yozuvidagi matn va fayllarni
 | Oddiy xabar (matn) | Matn (4096 belgidan uzun bo'lsa — .txt fayl) |
 | `.txt` | `.txt` |
 | `.docx` | `.docx` — formatlash (shrift, qalin/kursiv, jadval, sarlavha, kolontitul, izoh) to'liq saqlanadi |
+| `.xlsx` | `.xlsx` — XML darajasida o'giriladi: katak matnlari, rich text, izohlar, diagramma sarlavhalari, shakllardagi matn. Formulalar, format, diagrammalar, rasmlar, filtrlar bayt-babayt saqlanadi. Varaq nomlari o'zgartirilmaydi (formulalar ularga bog'langan) |
+| `.pptx` | `.pptx` — slaydlar, izohlar (notes), diagramma va SmartArt matni; dizayn o'zgarmaydi |
 | `.pdf` | `.pdf` + `.docx` — PDF **joyida** o'giriladi (rasm, tartib, shrift, rang saqlanadi; Times → Liberation Serif, Arial → Liberation Sans). Word nusxasi `pdf2docx` bilan rasmlar va jadvallar saqlangan holda yasalib, keyin o'giriladi. Skan PDF ishlamaydi |
 
 ## Ishga tushirish
@@ -96,6 +98,7 @@ python -m pytest tests -q
 bot/translit.py     — alifbo qoidalari (char-by-char mapping, formatlashni saqlash uchun)
 bot/documents.py    — txt / docx / pdf konvertorlar
 bot/pdf_inplace.py  — PDF'ni joyida o'girish (PyMuPDF)
+bot/ooxml.py        — Excel / PowerPoint'ni XML darajasida o'girish
 bot/main.py         — aiogram 3 bot (handlers + polling)
 bot/storage.py      — rejim xotirasi (Upstash Redis yoki RAM)
 api/index.py        — Vercel webhook kirish nuqtasi
