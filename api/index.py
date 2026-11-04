@@ -80,7 +80,7 @@ async def _setup() -> dict:
         await bot.set_my_commands(COMMANDS)
         me = await bot.get_me()
         return {"ok": True, "bot": f"@{me.username}", "webhook": url,
-                "webhook_changed": changed, "redis": storage.enabled()}
+                "webhook_changed": changed, "redis": await storage.ping()}
     finally:
         await bot.session.close()
 

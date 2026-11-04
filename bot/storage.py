@@ -74,3 +74,14 @@ async def claim_once(key: str, ttl: int = 3600) -> bool:
     except Exception:
         log.exception("redis SETNX failed")
         return True
+
+
+async def ping() -> bool | None:
+    """True/False if Redis is configured and (not) reachable, None if not configured."""
+    if not enabled():
+        return None
+    try:
+        return (await _cmd("PING")) == "PONG"
+    except Exception:
+        log.exception("redis PING failed")
+        return False
