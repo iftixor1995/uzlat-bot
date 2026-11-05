@@ -3,7 +3,7 @@ OCR with Google Gemini: photos, image files and scanned PDFs -> text -> new alph
 
 Env:
   GEMINI_API_KEY        required to enable OCR (Google AI Studio key)
-  GEMINI_MODEL          optional, default "gemini-2.5-flash"
+  GEMINI_MODEL          optional; tried first, then the built-in fallback list
   OCR_DAILY_LIMIT       optional, images per user per day (default 20; admins unlimited)
 """
 from __future__ import annotations
@@ -31,7 +31,12 @@ log = logging.getLogger("uzlat-bot.ocr")
 router = Router(name="ocr")
 
 API_KEY = os.environ.get("GEMINI_API_KEY", "")
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# Google retires model names for new projects without notice, so try a list in order,
+# skip names that answer 404, and remember the first one that works.
+FALLBACK_MODELS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash")
+_env_model = os.environ.get("GEMINI_MODEL", "").strip()
+MODELS = tuple(dict.fromkeys(([_env_model] if _env_model else []) + list(FALLBACK_MODELS)))
+_working_model: str | None = None
 DAILY_LIMIT = int(os.environ.get("OCR_DAILY_LIMIT", "20"))
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 MAX_BYTES = 14 * 1024 * 1024            # base64 adds ~33%; Gemini inline request limit is 20 MB
@@ -56,6 +61,19 @@ def enabled() -> bool:
     return bool(API_KEY)
 
 
+async def _post(model: str, body: dict) -> tuple[int, dict]:
+    """One generateContent call. Returns (HTTP status, JSON payload); status 0 = network error."""
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.post(ENDPOINT.format(model=model), json=body,
+                              headers={"x-goog-api-key": API_KEY},
+                              timeout=aiohttp.ClientTimeout(total=180)) as r:
+                return r.status, await r.json(content_type=None)
+    except Exception:
+        log.exception("gemini request failed (%s)", model)
+        return 0, {}
+
+
 async def extract_text(data: bytes, mime: str) -> str:
     if len(data) > MAX_BYTES:
         raise OCRError(convert("Fayl OCR uchun juda katta (14 MB gacha)."))
@@ -66,22 +84,21 @@ async def extract_text(data: bytes, mime: str) -> str:
         ]}],
         "generationConfig": {"temperature": 0},
     }
-    if "2.5" in MODEL:
-        body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}   # pure transcription
-    try:
-        async with aiohttp.ClientSession() as s:
-            async with s.post(ENDPOINT.format(model=MODEL), json=body,
-                              headers={"x-goog-api-key": API_KEY},
-                              timeout=aiohttp.ClientTimeout(total=180)) as r:
-                payload = await r.json(content_type=None)
-                status = r.status
-    except Exception as e:
-        log.exception("gemini request failed")
-        raise OCRError(convert("OCR xizmatiga ulanib bo'lmadi, birozdan keyin qayta urinib ko'ring.")) from e
+    global _working_model
+    order = ([_working_model] if _working_model else []) + [m for m in MODELS if m != _working_model]
+    status, payload = 0, {}
+    for model in order:
+        status, payload = await _post(model, body)
+        if status == 404:                      # model retired / unknown for this key: try the next
+            log.warning("gemini model %s unavailable, trying next", model)
+            continue
+        if status < 400:
+            _working_model = model
+        break
 
     if status == 429:
         raise OCRError(convert("Bugungi OCR limiti tugadi. Ertaga qayta urinib ko'ring."))
-    if status >= 400:
+    if status >= 400 or status == 0:
         log.error("gemini HTTP %s: %s", status, str(payload)[:500])
         raise OCRError(convert("Rasmni o'qib bo'lmadi. Boshqa, aniqroq surat yuboring."))
 
