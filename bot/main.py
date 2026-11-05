@@ -32,6 +32,7 @@ from aiogram.types import (
 from . import analytics, stats
 from .common import MAX_FILE_MB, TG_TEXT_LIMIT, ConversionError, safe_stem
 from .documents import SUPPORTED, NoTextInPDF, convert_file
+from .ocr import enabled as ocr_enabled
 from .prefs import get_mode, set_mode
 from .ui import (BTN_CONTACT, BTN_HELP, CONTACT_TEXT, MODE_HINT, MODE_LABELS, LABEL_TO_MODE,
                  kb_for, keyboard)
@@ -60,8 +61,7 @@ HELP = (
     "  • <b>.xlsx</b> — Excel: formula, format, diagrammalar saqlanadi\n"
     "  • <b>.pptx</b> — PowerPoint: slaydlar dizayni saqlanadi\n"
     "  • <b>.txt</b> — .txt qaytadi\n\n"
-    "📷 <b>Rasm</b> — hujjat suratini yoki skan PDF yuboring, matnini öqib, yangi alifboga ögiraman. "
-    "<i>Rasmlar matnni öqiş uçun Google Gemini xizmatiga yuboriladi.</i>\n\n"
+    "{ocr}"
     "🔎 <b>Inline</b> — istalgan çatda <code>@new_aplhabet_bot matn</code> deb yozing.\n\n"
     "🔤 <b>Alifbo</b> — 2026-yil 21-oktabrdagi qonun (28 harf + tutuq belgisi ʼ): "
     "oʻ→ö, gʻ→ğ, sh→ş, ch→ç.\n\n"
@@ -71,12 +71,15 @@ HELP = (
     f"• <b>{MODE_LABELS[MODE_AUTO]}</b> — {MODE_HINT[MODE_AUTO]}\n\n"
     "Misol: <code>Ўздаверлойиҳа</code> → <code>Özdavyerloyiha</code>"
 )
+_HELP_OCR = ("📷 <b>Rasm</b> — hujjat suratini yoki skan PDF yuboring, matnini öqib, yangi alifboga ögiraman. "
+             "<i>Rasmlar matnni öqiş uçun Google Gemini xizmatiga yuboriladi.</i>\n\n")
+HELP = HELP.replace("{ocr}", _HELP_OCR if ocr_enabled() else "")
 MSG_GENERIC_ERROR = "❌ Kutilmagan xatolik yuz berdi. Iltimos, birozdan keyin qayta urinib köring."
 MSG_FILE_ERROR = "❌ Faylni ögirişda xatolik. Fayl buzilmaganini tekşirib, qayta yuboring."
 MSG_TIMEOUT = "⌛️ Fayl juda uzoq işlandi. Kiçikroq qismlarga bölib yuboring."
 MSG_NOTHING = "Bu matnda ögiradigan narsa yöq — allaqaçon yangi alifboda ✅"
 MSG_UNKNOWN_CMD = "Bunday buyruq yöq. Yordam: /help"
-MSG_OTHER = "Matn yoki Word / PDF / Excel / PowerPoint / .txt fayl, yoki hujjat rasmini yuboring. Yordam: /help"
+MSG_OTHER = "Matn yoki Word / PDF / Excel / PowerPoint / .txt fayl yuboring. Yordam: /help"
 
 
 def welcome_text(first_name: str | None) -> str:
@@ -88,7 +91,8 @@ def welcome_text(first_name: str | None) -> str:
         "📝 <b>Matn</b> yuboring — darhol ögirib qaytaraman.\n"
         "📄 <b>Fayl</b> yuboring — Word, PDF, Excel, PowerPoint yoki .txt (20 MB gaça). "
         "Word faylda şrift, jadval va sarlavhalar öz holiça qoladi.\n"
-        "📷 <b>Rasm</b> yuboring — hujjat suratidagi matnni öqib beraman.\n\n"
+        + ("📷 <b>Rasm</b> yuboring — hujjat suratidagi matnni öqib beraman.\n" if ocr_enabled() else "")
+        + "\n"
         "⚙️ Pastdagi tugmalar bilan rejimni tanlang:\n"
         f"  • <b>{MODE_LABELS[MODE_CYR]}</b> — kirill matn uçun\n"
         f"  • <b>{MODE_LABELS[MODE_LAT]}</b> — eski lotin (oʻ, gʻ, sh, ch) uçun\n"
