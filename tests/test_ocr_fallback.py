@@ -69,3 +69,23 @@ def test_error_detail_carries_status(monkeypatch):
         assert "403" in e.detail and "API key" in e.detail
         return
     raise AssertionError
+
+
+def test_busy_model_falls_over_to_next(monkeypatch):
+    calls = []
+
+    async def fake_post(model, body):
+        calls.append(model)
+        if model == "b":
+            return 200, {"candidates": [{"content": {"parts": [{"text": "OK"}]}}]}
+        return 503, {"error": {"status": "UNAVAILABLE"}}
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(ocr, "MODELS", ("a", "b"))
+    monkeypatch.setattr(ocr, "_working_model", None)
+    monkeypatch.setattr(ocr, "_post", fake_post)
+    monkeypatch.setattr(ocr.asyncio, "sleep", no_sleep)
+    assert asyncio.run(ocr.extract_text(b"x", "image/jpeg")) == "OK"
+    assert calls == ["a", "a", "b"]

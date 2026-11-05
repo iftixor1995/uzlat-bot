@@ -8,6 +8,7 @@ Env:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import html
 import io
@@ -119,12 +120,23 @@ async def extract_text(data: bytes, mime: str) -> str:
     order = ([_working_model] if _working_model else []) + [m for m in MODELS if m != _working_model]
     status, payload, tried = 0, {}, []
     discovered = False
+    busy = False
     while order:
         model = order.pop(0)
         if model in tried:
             continue
         tried.append(model)
         status, payload = await _post(model, body)
+        if status in (0, 500, 502, 503, 504):  # overloaded / transient: one quick retry, then next model
+            await asyncio.sleep(2)
+            status, payload = await _post(model, body)
+            if status in (0, 500, 502, 503, 504):
+                log.warning("gemini model %s busy (HTTP %s), trying next", model, status)
+                busy = True
+                if not order and not discovered:
+                    discovered = True
+                    order = [m for m in await _discover_models() if m not in tried]
+                continue
         if status == 404:                      # model retired / unknown for this key: try the next
             log.warning("gemini model %s unavailable", model)
             if not order and not discovered:
@@ -140,6 +152,9 @@ async def extract_text(data: bytes, mime: str) -> str:
     detail = f"HTTP {status} ({tried[-1] if tried else '-'}): {str(payload.get('error', payload))[:300]}"
     if status == 429:
         raise OCRError(convert("Bugungi OCR limiti tugadi. Ertaga qayta urinib ko'ring."), detail)
+    if busy and (status >= 500 or status == 0 or status == 404):
+        log.error("gemini busy, tried %s: %s", tried, detail)
+        raise OCRError(convert("OCR xizmati hozir band. Bir daqiqadan keyin rasmni qayta yuboring."), detail)
     if status >= 400 or status == 0:
         log.error("gemini failed, tried %s: %s", tried, detail)
         raise OCRError(convert("Rasmni o'qib bo'lmadi. Boshqa, aniqroq surat yuboring."), detail)
