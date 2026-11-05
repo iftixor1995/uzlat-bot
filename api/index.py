@@ -4,6 +4,8 @@ Vercel entry point (webhook mode). Plain ASGI app, no web framework.
   POST /          Telegram update. Requires X-Telegram-Bot-Api-Secret-Token == WEBHOOK_SECRET.
   POST /setup     (Re)registers the webhook and bot commands, returns a status report.
                   Requires header X-Setup-Key == WEBHOOK_SECRET. Idempotent.
+                  Routed by the header, not the path: Vercel's rewrite hands every request
+                  to this function as /api/index, and Telegram never sends X-Setup-Key.
   GET  /          Liveness probe only — reveals nothing.
 
 Env:
@@ -114,7 +116,6 @@ async def app(scope, receive, send):
         return
 
     method = scope.get("method", "GET")
-    path = scope.get("path", "/").rstrip("/") or "/"
     headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
 
     if method == "GET":
@@ -124,7 +125,7 @@ async def app(scope, receive, send):
         await _respond(send, 405, {"ok": False})
         return
 
-    if path == "/setup":
+    if "x-setup-key" in headers:
         if not _authorized(headers.get("x-setup-key")):
             await _respond(send, 403, {"ok": False})
             return

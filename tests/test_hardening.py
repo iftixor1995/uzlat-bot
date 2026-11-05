@@ -188,5 +188,5 @@ def test_webhook_rejects_everything_without_configured_secret(webhook, monkeypat
 def test_get_reveals_nothing_and_setup_needs_key(webhook):
     m, _ = webhook
     assert _call(m, "GET") == (200, {"ok": True})
-    assert _call(m, "POST", path="/setup")[0] == 403
-    assert _call(m, "POST", path="/setup", headers=[(b"x-setup-key", b"wrong")])[0] == 403
+    assert _call(m, "POST", path="/setup", headers=[(b"x-setup-key", b"")])[0] == 403
+    assert _call(m, "POST", path="/api/index", headers=[(b"x-setup-key", b"wrong")])[0] == 403
