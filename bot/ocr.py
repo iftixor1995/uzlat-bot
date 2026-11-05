@@ -14,6 +14,7 @@ import html
 import io
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -47,12 +48,38 @@ IMAGE_EXT = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
              ".webp": "image/webp", ".heic": "image/heic", ".heif": "image/heif"}
 
 PROMPT = (
-    "Extract ALL text from this document exactly as written. The text is mostly Uzbek "
-    "(Cyrillic or Latin script, letters like ў қ ғ ҳ oʻ gʻ must be preserved) or Russian. "
-    "Keep paragraphs and line breaks. Keep tables as lines with cells separated by ' | '. "
-    "Do NOT translate, transliterate, summarize, correct or comment. "
-    "Output only the extracted text. If there is no text, output nothing."
+    "You are an OCR engine. Extract the MAIN text content of this image exactly as written.\n"
+    "Language: mostly Uzbek (Cyrillic or Latin; keep letters like ў қ ғ ҳ ё ъ oʻ gʻ) or Russian.\n"
+    "Rules:\n"
+    "1. Only the main page/document. IGNORE cut-off fragments at the image edges, text of a "
+    "neighbouring page, running headers/footers, page numbers, book or chapter titles "
+    "repeated in margins, watermarks.\n"
+    "2. Rebuild paragraphs: join the lines of one paragraph with a single space. If a word is "
+    "split with a hyphen at a line end, join it back into one word without the hyphen. "
+    "Never drop or merge words, never lose spaces after punctuation.\n"
+    "3. Keep poems, verses, lists and addresses line by line. Separate paragraphs with one empty line.\n"
+    "4. Tables: one row per line, cells separated by ' | '.\n"
+    "5. Plain text only: no Markdown, no '#', no '**', no comments.\n"
+    "6. Do NOT translate, transliterate, summarize or correct anything.\n"
+    "If there is no text, output nothing."
 )
+
+_MD_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+", re.M)
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*|__(.+?)__", re.S)
+_HYPHEN_BREAK = re.compile(r"(\w)[-\u00ad]\n(?=[^\W\d_])")
+_NO_SPACE_AFTER = re.compile(r"([,;:!?])(?=[^\W\d_])")
+
+
+def clean_ocr(text: str) -> str:
+    """Safety net for model output: strip Markdown, re-join hyphenated line breaks,
+    restore a missing space after punctuation."""
+    text = text.replace("\r\n", "\n")
+    text = _MD_HEADING.sub("", text)
+    text = _MD_BOLD.sub(lambda m: m.group(1) or m.group(2), text)
+    text = _HYPHEN_BREAK.sub(r"\1", text)
+    text = _NO_SPACE_AFTER.sub(r"\1 ", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 class OCRError(Exception):
@@ -160,7 +187,7 @@ async def extract_text(data: bytes, mime: str) -> str:
         raise OCRError(convert("Rasmni o'qib bo'lmadi. Boshqa, aniqroq surat yuboring."), detail)
 
     parts = (((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
-    return "".join(p.get("text", "") for p in parts).strip()
+    return clean_ocr("".join(p.get("text", "") for p in parts))
 
 
 async def _check_quota(user_id: int) -> None:

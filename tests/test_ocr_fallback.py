@@ -89,3 +89,13 @@ def test_busy_model_falls_over_to_next(monkeypatch):
     monkeypatch.setattr(ocr.asyncio, "sleep", no_sleep)
     assert asyncio.run(ocr.extract_text(b"x", "image/jpeg")) == "OK"
     assert calls == ["a", "a", "b"]
+
+
+def test_clean_ocr():
+    raw = "# Муқаддима\n\nДавраларда, ўқувчилар қа-\nрашлар,мулоҳазалар **юради**.\n\n\n\nБор эди, ул ҳамки,\nКулди ар ёр"
+    out = ocr.clean_ocr(raw)
+    assert out.startswith("Муқаддима\n\n")
+    assert "қарашлар, мулоҳазалар юради." in out
+    assert "\n\n\n" not in out
+    assert "ҳамки,\nКулди" in out          # verse lines kept
+    assert ocr.clean_ocr("2024-\n2025") == "2024-\n2025"   # digits untouched
