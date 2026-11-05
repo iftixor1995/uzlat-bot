@@ -4,6 +4,7 @@ Admin-only commands.
   /id                      anyone: shows your Telegram ID (needed once to set ADMIN_IDS)
   /stats                   admins: usage report
   /broadcast  (as reply)   admins: copy the replied message to every user, after confirmation
+  /import     (text/file)  admins: add user IDs (e.g. pasted from the Google Sheet) to the broadcast list
 
 Env: ADMIN_IDS="123456789,987654321"
 """
@@ -13,6 +14,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import time
 
 from aiogram import Bot, F, Router
@@ -45,6 +47,45 @@ async def cmd_stats(message: Message) -> None:
     if not is_admin(message.from_user and message.from_user.id):
         return
     await message.answer(await stats.report())
+
+
+_ID_RE = re.compile(r"(?<![\w@.:-])\d{5,15}(?![\w.:-])")
+MAX_IMPORT_BYTES = 2 * 1024 * 1024
+
+
+def parse_ids(text: str) -> set[int]:
+    """Telegram user IDs from pasted text or a CSV export (5-15 digit standalone numbers)."""
+    return {int(x) for x in _ID_RE.findall(text or "") if int(x) > 0}
+
+
+@router.message(Command("import"))
+async def cmd_import(message: Message, bot: Bot) -> None:
+    if not is_admin(message.from_user and message.from_user.id):
+        return
+    src = message.reply_to_message or message
+    text = re.sub(r"^/\S+", "", message.text or message.caption or "")
+    doc = src.document
+    if doc and doc.file_size and doc.file_size <= MAX_IMPORT_BYTES:
+        buf = await bot.download(doc)
+        text += "\n" + buf.read().decode("utf-8", "ignore")
+    elif src is not message:
+        text += "\n" + (src.text or src.caption or "")
+    ids = parse_ids(text)
+    if not ids:
+        await message.answer(
+            "📥 <b>Foydalanuvçilarni import qiliş</b>\n\n"
+            "Google Sheet'dagi <b>Telegram ID</b> ustunini nusxalab, şunday yuboring:\n"
+            "<code>/import 123456789 987654321 …</code>\n\n"
+            "Yoki sheet'ni CSV qilib yuklab, faylga javob (reply) qilib <code>/import</code> yozing."
+        )
+        return
+    before = int(await storage.cmd("SCARD", "users") or 0)
+    ids_list = sorted(ids)
+    for i in range(0, len(ids_list), 500):
+        await storage.cmd("SADD", "users", *ids_list[i:i + 500])
+    after = int(await storage.cmd("SCARD", "users") or 0)
+    await message.answer(f"✅ Import: {len(ids)} ta ID topildi, {after - before} tasi yangi.\n"
+                         f"Tarqatiş röyxatida endi: <b>{after}</b> kişi.")
 
 
 @router.message(Command("broadcast"))
