@@ -52,11 +52,13 @@ _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 # URLs, e-mails, @handles, file names — never transliterated
 _PROTECTED_RE = re.compile(
-    r"(?:https?://|ftp://|www\.)\S+"                       # http://..., www....
-    r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+"                        # e-mail
-    r"|(?<![\w@])@[A-Za-z0-9_]{3,}"                          # @telegram_handle
-    r"|\b[\w-]+(?:\.[\w-]+)*\.(?:uz|com|org|net|ru|io|info|edu|gov|tj|kz)(?:/\S*)?",  # domain.uz/...
-    re.UNICODE,
+    # every alternative is anchored by a cheap negative look-behind and has bounded
+    # repetition, so scanning stays linear even on long unbroken runs (base64, etc.)
+    r"(?:https?://|ftp://|www\.)\S+"                                            # URLs
+    r"|(?<![\w.%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}"  # e-mail
+    r"|(?<![\w@])@[A-Za-z0-9_]{3,32}\b"                                          # @handle
+    r"|(?<![\w.-])[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}"
+    r"\.(?:uz|com|org|net|ru|io|info|edu|gov|tj|kz)\b(?:/\S*)?",                 # domain.uz/path
 )
 
 # ---------------------------------------------------------------- compounds
@@ -75,6 +77,8 @@ def _load_compounds() -> tuple[frozenset[str], tuple[str, ...]]:
 
 COMPOUND_PREFIXES, E_ROOTS = _load_compounds()
 _MAX_PREFIX = max((len(p) for p in COMPOUND_PREFIXES), default=0)
+_MAX_ROOT = max((len(r) for r in E_ROOTS), default=0)
+_MAX_WORD_LOOKBACK = 64          # compound words are never longer than this
 
 
 def _segmentable(s: str) -> bool:
@@ -97,14 +101,14 @@ def _e_starts_compound_root(text: str, i: int) -> bool:
         return False
     # word start
     j = i
-    while j > 0 and text[j - 1].isalpha():
+    while j > 0 and i - j < _MAX_WORD_LOOKBACK and text[j - 1].isalpha():
         j -= 1
-    if j == i:
+    if j == i or (j > 0 and text[j - 1].isalpha()):
         return False
     left = text[j:i].lower()
     if not _segmentable(left):
         return False
-    rest = text[i:].lower()
+    rest = text[i:i + _MAX_ROOT].lower()
     return any(rest.startswith(r) for r in E_ROOTS)
 
 
@@ -274,7 +278,3 @@ def convert_chars(text: str, mode: str = MODE_AUTO) -> list[str]:
 def convert(text: str, mode: str = MODE_AUTO) -> str:
     return "".join(convert_chars(text, mode))
 
-
-def looks_already_new(text: str) -> bool:
-    """True when the text contains no Cyrillic and no 1995-era digraphs."""
-    return convert(text) == text

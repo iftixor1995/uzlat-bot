@@ -25,6 +25,12 @@ def enabled() -> bool:
     return bool(_URL and _SECRET)
 
 
+def _cell(value: str) -> str:
+    """Neutralise spreadsheet formula injection (=, +, -, @ at the start of a cell)."""
+    value = (value or "")[:200]
+    return "'" + value if value[:1] in ("=", "+", "-", "@") else value
+
+
 async def log_start(message: Message, source: str | None) -> None:
     if not enabled() or not message.from_user:
         return
@@ -32,12 +38,12 @@ async def log_start(message: Message, source: str | None) -> None:
     payload = {
         "secret": _SECRET,
         "user_id": u.id,
-        "username": f"@{u.username}" if u.username else "",
-        "first_name": u.first_name or "",
-        "last_name": u.last_name or "",
-        "language": u.language_code or "",
+        "username": f"@{u.username}" if u.username else "",      # Telegram usernames are [A-Za-z0-9_]
+        "first_name": _cell(u.first_name),
+        "last_name": _cell(u.last_name),
+        "language": _cell(u.language_code),
         "premium": bool(u.is_premium),
-        "source": source or "",
+        "source": _cell(source),
         "ts": int(message.date.timestamp()),
     }
     try:

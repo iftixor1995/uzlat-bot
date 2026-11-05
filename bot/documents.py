@@ -1,76 +1,104 @@
 """
-File converters.  Every function takes an input path and an output directory
-and returns the list of produced files.
+File converters. Each takes an input path and an output directory and returns
+the produced files. They are synchronous and CPU-bound — callers run them in a thread.
 
   .txt   -> .txt
-  .xlsx  -> .xlsx   (XML-level: formulas, styles, charts, images untouched)
-  .pptx  -> .pptx   (XML-level: slides, notes, charts, SmartArt text)
-  .docx  -> .docx   (all formatting kept: runs, tables, headers/footers, text boxes)
-  .pdf   -> .pdf (in place: images, layout, fonts kept; only text glyphs replaced)
-            + .docx (pdf2docx keeps images/tables/layout, then transliterated run-by-run)
+  .docx  -> .docx   (every run keeps its formatting; headers, footers, notes, comments, text boxes)
+  .xlsx  -> .xlsx   (XML level: formulas, styles, charts, images untouched)
+  .pptx  -> .pptx   (XML level: slides, notes, charts, SmartArt text)
+  .pdf   -> .pdf    (in place: images, layout, fonts kept; only text glyphs replaced)
+            + .docx (pdf2docx keeps images/tables; then converted run by run)
+
+Errors meant for the user are raised as `ConversionError` (or a subclass).
 """
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
-import pdfplumber
+import pymupdf
 from docx import Document
+from lxml import etree
 from docx.oxml.ns import qn
-from docx.shared import Pt
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer
 
-from .ooxml import convert_pptx_inplace, convert_xlsx_inplace
+from .common import ConversionError, text_to_docx
+from .ooxml import check_package, convert_pptx_inplace, convert_xlsx_inplace
 from .pdf_inplace import convert_pdf_inplace
 from .translit import MODE_AUTO, convert, convert_chars
 
+log = logging.getLogger("uzlat-bot.documents")
+
 SUPPORTED = {".txt", ".docx", ".pdf", ".xlsx", ".pptx"}
-_FONT_CANDIDATES = [
-    str(Path(__file__).with_name("fonts") / "DejaVuSans.ttf"),   # bundled — works on any host
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "C:/Windows/Fonts/DejaVuSans.ttf",
-    "C:/Windows/Fonts/arial.ttf",
-]
+MAX_PDF_PAGES = 150                 # hard cap: keeps a request well inside the 300 s limit
+PDF2DOCX_MAX_PAGES = 60             # layout-preserving Word copy only up to this size
+MAX_TXT_BYTES = 5 * 1024 * 1024
 
 
-def _out_name(src: Path, suffix: str) -> str:
-    return f"{src.stem}_yangi{suffix}"
+class NoTextInPDF(ConversionError):
+    """The PDF has no text layer (a scan) — the caller may fall back to OCR."""
+
+
+# pdf2docx logs every page through the *root* logger at INFO. Our own loggers are
+# named, so dropping sub-WARNING records that were logged directly on root is safe
+# and, unlike logging.disable(), does not silence other threads.
+class _DropRootInfo(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (record.name == "root" and record.levelno < logging.WARNING)
+
+
+logging.getLogger().addFilter(_DropRootInfo())
+
+
+def _out_name(stem: str, suffix: str) -> str:
+    return f"{stem}_yangi{suffix}"
 
 
 # ------------------------------------------------------------------ txt
-def _read_text(path: Path) -> str:
-    raw = path.read_bytes()
-    for enc in ("utf-8-sig", "utf-16", "cp1251"):
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace")
+def _read_text(raw: bytes) -> str:
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):          # UTF-16 only with a BOM
+        return raw.decode("utf-16")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1251", errors="replace")       # typical Windows Cyrillic
 
 
 def convert_txt(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
-    dst = out_dir / _out_name(src, ".txt")
-    dst.write_text(convert(_read_text(src), mode), encoding="utf-8")
+    raw = src.read_bytes()
+    if len(raw) > MAX_TXT_BYTES:
+        raise ConversionError("Matn fayli juda katta (5 MB gaça).")
+    text = _read_text(raw)
+    dst = out_dir / _out_name(src.stem, ".txt")
+    # line by line: bounded memory per call, identical result (rules never cross lines)
+    dst.write_text("".join(convert(line, mode) for line in text.splitlines(keepends=True)),
+                   encoding="utf-8")
     return [dst]
 
 
 # ------------------------------------------------------------------ docx
+_W_P, _W_T = qn("w:p"), qn("w:t")
+_DOCX_TEXT_PARTS = re.compile(r"^/word/(document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$")
+
+
+def _own_text_nodes(p):
+    """<w:t> nodes that belong to paragraph `p` itself — not to a paragraph nested
+    inside it (text boxes live inside a run of the outer paragraph)."""
+    for t in p.iter(_W_T):
+        if next(t.iterancestors(_W_P), None) is p:
+            yield t
+
+
 def _convert_paragraph(p, mode: str) -> None:
-    """Convert all <w:t> nodes of one paragraph as a single string, then
-    redistribute the output back to each node so run formatting survives."""
-    nodes = list(p.iter(qn("w:t")))
+    """Convert a paragraph as one string, then redistribute the result over its
+    runs so that every run keeps its formatting and context rules see whole words."""
+    nodes = list(_own_text_nodes(p))
     if not nodes:
         return
     texts = [t.text or "" for t in nodes]
     mapped = convert_chars("".join(texts), mode)
     pos = 0
-    for t, s in zip(nodes, texts):
+    for t, s in zip(nodes, texts, strict=True):
         new = "".join(mapped[pos:pos + len(s)])
         pos += len(s)
         if new != s:
@@ -79,129 +107,95 @@ def _convert_paragraph(p, mode: str) -> None:
                 t.set(qn("xml:space"), "preserve")
 
 
-def _convert_part(element, mode: str) -> None:
-    for p in element.iter(qn("w:p")):          # body, tables, text boxes, nested tables
-        _convert_paragraph(p, mode)
-
-
 def convert_docx(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
+    check_package(src)
     doc = Document(str(src))
-    _convert_part(doc.element.body, mode)
-    for section in doc.sections:
-        for part in (section.header, section.footer,
-                     section.first_page_header, section.first_page_footer,
-                     section.even_page_header, section.even_page_footer):
-            try:
-                _convert_part(part._element, mode)
-            except Exception:       # header part may not exist / be linked
-                pass
-    # footnotes / endnotes / comments if present
-    for rel in doc.part.rels.values():
-        if any(k in rel.reltype for k in ("footnotes", "endnotes", "comments")):
-            try:
-                _convert_part(rel.target_part.element, mode)
-            except Exception:
-                pass
-    # core properties (title etc.)
-    cp = doc.core_properties
-    if cp.title:
-        cp.title = convert(cp.title, mode)
-    dst = out_dir / _out_name(src, ".docx")
+    # walk the parts that actually exist (accessing section.header would *create* one)
+    for part in doc.part.package.iter_parts():
+        if not _DOCX_TEXT_PARTS.match(str(part.partname)):
+            continue
+        if hasattr(part, "element"):                       # parsed parts: document, headers…
+            for p in part.element.iter(_W_P):
+                _convert_paragraph(p, mode)
+        else:                                              # raw parts: footnotes, endnotes…
+            root = etree.fromstring(part.blob, etree.XMLParser(resolve_entities=False, no_network=True))
+            for p in root.iter(_W_P):
+                _convert_paragraph(p, mode)
+            part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+    if doc.core_properties.title:
+        doc.core_properties.title = convert(doc.core_properties.title, mode)
+    dst = out_dir / _out_name(src.stem, ".docx")
     doc.save(str(dst))
     return [dst]
 
 
 # ------------------------------------------------------------------ pdf
 def _pdf_pages(src: Path) -> list[str]:
-    pages = []
-    with pdfplumber.open(str(src)) as pdf:
-        for page in pdf.pages:
-            pages.append(page.extract_text() or "")
-    return pages
-
-
-def _register_font() -> str:
-    for cand in _FONT_CANDIDATES:
-        if Path(cand).exists():
-            pdfmetrics.registerFont(TTFont("UzSans", cand))
-            return "UzSans"
-    return "Helvetica"      # Ö/Ş render as boxes without a Unicode font
-
-
-def _write_pdf(pages: list[str], dst: Path) -> None:
-    font = _register_font()
-    style = ParagraphStyle("body", fontName=font, fontSize=11, leading=15)
-    doc = SimpleDocTemplate(str(dst), pagesize=A4,
-                            leftMargin=20 * mm, rightMargin=20 * mm,
-                            topMargin=20 * mm, bottomMargin=20 * mm)
-    story = []
-    for idx, text in enumerate(pages):
-        for line in text.splitlines():
-            if line.strip():
-                safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                story.append(Paragraph(safe, style))
-            else:
-                story.append(Spacer(1, 6))
-        if idx < len(pages) - 1:
-            story.append(PageBreak())
-    doc.build(story or [Spacer(1, 1)])
-
-
-def _write_docx(pages: list[str], dst: Path) -> None:
-    doc = Document()
-    style = doc.styles["Normal"]
-    style.font.name = "Arial"
-    style.font.size = Pt(11)
-    for idx, text in enumerate(pages):
-        for line in text.splitlines():
-            doc.add_paragraph(line)
-        if idx < len(pages) - 1:
-            doc.add_page_break()
-    doc.save(str(dst))
+    try:
+        with pymupdf.open(str(src)) as pdf:
+            if pdf.needs_pass:
+                raise ConversionError("PDF parol bilan himoyalangan.")
+            if pdf.page_count > MAX_PDF_PAGES:
+                raise ConversionError(f"PDF juda katta: {pdf.page_count} sahifa ({MAX_PDF_PAGES} tagaça).")
+            return [page.get_text() for page in pdf]
+    except ConversionError:
+        raise
+    except Exception as e:
+        raise ConversionError("PDF faylni oçib bölmadi — u buzilgan bölişi mumkin.") from e
 
 
 def _pdf_to_docx(src: Path, work_dir: Path) -> Path:
     """PDF -> editable DOCX with images and layout (pdf2docx)."""
-    import logging as _logging
-
     from pdf2docx import Converter
 
     raw = work_dir / f"{src.stem}.docx"
-    _logging.disable(_logging.INFO)          # pdf2docx logs every page at INFO
+    cv = Converter(str(src))
     try:
-        cv = Converter(str(src))
-        try:
-            cv.convert(str(raw), multi_processing=False)
-        finally:
-            cv.close()
+        cv.convert(str(raw), multi_processing=False)
     finally:
-        _logging.disable(_logging.NOTSET)
+        cv.close()
     return raw
 
 
 def convert_pdf(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
     pages = _pdf_pages(src)
     if not any(p.strip() for p in pages):
-        raise ValueError("PDF içida matn topilmadi (skan qilingan bölişi mumkin).")
+        raise NoTextInPDF("PDF içida matn topilmadi (skan qilingan bölişi mumkin).")
+    converted = [convert(p, mode) for p in pages]
 
-    out_pdf = out_dir / _out_name(src, ".pdf")
+    out_pdf = out_dir / _out_name(src.stem, ".pdf")
     try:
         convert_pdf_inplace(src, out_pdf, mode)
     except Exception:
-        logging.getLogger("uzlat-bot").exception("in-place PDF failed, using text fallback")
-        _write_pdf([convert(p, mode) for p in pages], out_pdf)
+        log.exception("in-place PDF failed, falling back to a text PDF")
+        _write_text_pdf(converted, out_pdf)
 
-    out_docx = out_dir / _out_name(src, ".docx")
-    work = out_dir / "_pdf2docx"
-    work.mkdir(exist_ok=True)
-    try:
-        raw = _pdf_to_docx(src, work)
-        produced = convert_docx(raw, work, mode)[0]
-        produced.replace(out_docx)
-    except Exception:
-        logging.getLogger("uzlat-bot").exception("pdf2docx failed, using text fallback")
-        _write_docx([convert(p, mode) for p in pages], out_docx)   # text-only fallback
+    out_docx = out_dir / _out_name(src.stem, ".docx")
+    if len(pages) <= PDF2DOCX_MAX_PAGES:
+        work = out_dir / "_pdf2docx"
+        work.mkdir(exist_ok=True)
+        try:
+            produced = convert_docx(_pdf_to_docx(src, work), work, mode)[0]
+            produced.replace(out_docx)
+            return [out_pdf, out_docx]
+        except Exception:
+            log.exception("pdf2docx failed, falling back to a text DOCX")
+    text_to_docx("", out_docx, page_breaks=converted)
     return [out_pdf, out_docx]
+
+
+def _write_text_pdf(pages: list[str], dst: Path) -> None:
+    """Last-resort PDF: plain text pages with a bundled Unicode font."""
+    font = Path(__file__).with_name("fonts") / "DejaVuSans.ttf"
+    out = pymupdf.open()
+    try:
+        for text in pages:
+            page = out.new_page()
+            page.insert_textbox(pymupdf.Rect(50, 50, page.rect.width - 50, page.rect.height - 50),
+                                text, fontsize=11, fontname="uz", fontfile=str(font))
+        out.save(str(dst))
+    finally:
+        out.close()
 
 
 # ------------------------------------------------------------------ dispatch
@@ -213,12 +207,8 @@ def convert_file(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
         return convert_docx(src, out_dir, mode)
     if ext == ".pdf":
         return convert_pdf(src, out_dir, mode)
-    if ext == ".xlsx":
-        dst = out_dir / _out_name(src, ".xlsx")
-        convert_xlsx_inplace(src, dst, mode)
+    if ext in (".xlsx", ".pptx"):
+        dst = out_dir / _out_name(src.stem, ext)
+        (convert_xlsx_inplace if ext == ".xlsx" else convert_pptx_inplace)(src, dst, mode)
         return [dst]
-    if ext == ".pptx":
-        dst = out_dir / _out_name(src, ".pptx")
-        convert_pptx_inplace(src, dst, mode)
-        return [dst]
-    raise ValueError(f"Qöllab-quvvatlanmaydigan format: {ext}")
+    raise ConversionError(f"Qöllab-quvvatlanmaydigan format: {ext}")

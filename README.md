@@ -28,11 +28,28 @@ BOT_TOKEN=... python -m bot.main
 ```
 
 ### Vercel (tavsiya — tekin, webhook rejimi)
-1. vercel.com → Add New → Project → shu GitHub repo'ni import qiling (Framework: Other).
-2. Environment Variables: `BOT_TOKEN`, `WEBHOOK_SECRET` (istalgan tasodifiy satr).
-3. (ixtiyoriy) Storage → Upstash Redis ulang — tanlangan rejim eslab qolinadi va takroriy update'lar tashlanadi.
-4. Deploy → saytning asosiy manzilini brauzerda oching (`https://<loyiha>.vercel.app/`) — webhook o'zi ro'yxatdan o'tadi, `{"ok": true, ...}` qaytadi.
-Kirish nuqtasi: `api/index.py` (ASGI), sozlamalar: `vercel.json`. Polling uchun `python -m bot.main` ham ishlayveradi.
+1. vercel.com → Add New → Project → shu GitHub repo'ni import qiling.
+2. Environment Variables:
+
+   | O'zgaruvchi | Majburiy | Izoh |
+   |---|---|---|
+   | `BOT_TOKEN` | ha | @BotFather tokeni |
+   | `WEBHOOK_SECRET` | ha | tasodifiy satr, faqat `A-Z a-z 0-9 _ -` (Telegram talabi) |
+   | `KV_REST_API_URL`, `KV_REST_API_TOKEN` | tavsiya | Storage → Upstash Redis (prefiks `KV`) |
+   | `ADMIN_IDS` | ixtiyoriy | `/stats`, `/broadcast` uchun Telegram ID'lar, vergul bilan (`/id` buyrug'i ko'rsatadi) |
+   | `GEMINI_API_KEY` | ixtiyoriy | rasm/skan PDF OCR (aistudio.google.com) |
+   | `GEMINI_MODEL`, `OCR_DAILY_LIMIT` | ixtiyoriy | standart: `gemini-2.5-flash`, `20` |
+   | `SHEETS_WEBHOOK_URL`, `SHEETS_WEBHOOK_SECRET` | ixtiyoriy | /start statistikasi (pastga qarang) |
+
+3. Deploy, keyin webhook'ni ro'yxatdan o'tkazing (o'zgaruvchilar o'zgarganda ham takrorlang):
+   ```bash
+   curl -X POST -H "X-Setup-Key: $WEBHOOK_SECRET" https://<loyiha>.vercel.app/setup
+   ```
+   Javobda `webhook`, `redis`, `inline_enabled`, `ocr`, `admins` holati ko'rinadi.
+4. Inline rejim uchun bir marta: @BotFather → `/setinline` → botni tanlang → placeholder matn.
+
+`GET /` faqat `{"ok": true}` qaytaradi. `POST /` faqat Telegram'ning `X-Telegram-Bot-Api-Secret-Token`
+header'i to'g'ri bo'lsa qabul qilinadi.
 
 ### HOKAS (hokas.net) va shunga o'xshash Python hostinglar
 Docker shart emas. Loyiha papkasini yuklang, so'ng:
@@ -100,9 +117,16 @@ bot/documents.py    — txt / docx / pdf konvertorlar
 bot/pdf_inplace.py  — PDF'ni joyida o'girish (PyMuPDF)
 bot/ooxml.py        — Excel / PowerPoint'ni XML darajasida o'girish
 bot/main.py         — aiogram 3 bot (handlers + polling)
-bot/storage.py      — rejim xotirasi (Upstash Redis yoki RAM)
+bot/storage.py      — Upstash Redis REST (pipeline, sessiya qayta ishlatiladi) yoki RAM
+bot/prefs.py        — chat rejimi
+bot/stats.py        — statistika (middleware + /stats hisoboti)
+bot/admin.py        — /id, /stats, /broadcast
+bot/inline.py       — inline rejim
+bot/ocr.py          — Gemini OCR (rasm, skan PDF)
+bot/keyboard_help.py — Ö Ğ Ş Ç klaviatura yo'riqnomasi
+bot/common.py       — umumiy limitlar va yordamchilar
 api/index.py        — Vercel webhook kirish nuqtasi
 bot/exceptions.json — istisno so'zlar lug'ati
 bot/compounds.json  — qisqartma bo'laklari va е-o'zaklar
-tests/              — 56 ta test
+tests/              — 97 ta test
 ```

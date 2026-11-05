@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pymupdf
 
-from .translit import MODE_AUTO, convert
+from .translit import MODE_AUTO, convert_chars
 
 _FONT_DIR = Path(__file__).with_name("fonts")
 
@@ -41,7 +41,31 @@ def _rgb(color: int) -> tuple[float, float, float]:
 
 def convert_pdf_inplace(src: Path, dst: Path, mode: str = MODE_AUTO) -> dict:
     doc = pymupdf.open(str(src))
-    stats = {"pages": len(doc), "spans_changed": 0, "spans_total": 0, "text_chars": 0}
+    try:
+        return _convert_doc(doc, dst, mode)
+    finally:
+        doc.close()
+
+
+def _line_jobs(line: dict, mode: str) -> list[tuple[dict, str]]:
+    """Convert a whole line at once (context rules see words split across spans),
+    then hand each span its share of the result. Returns only changed spans."""
+    spans = [sp for sp in line["spans"] if sp["text"]]
+    if not spans:
+        return []
+    mapped = convert_chars("".join(sp["text"] for sp in spans), mode)
+    jobs, pos = [], 0
+    for sp in spans:
+        n = len(sp["text"])
+        new = "".join(mapped[pos:pos + n])
+        pos += n
+        if new != sp["text"] and sp["text"].strip():
+            jobs.append((sp, new))
+    return jobs
+
+
+def _convert_doc(doc, dst: Path, mode: str) -> dict:
+    stats = {"pages": len(doc), "spans_changed": 0}
     font_cache: dict[str, pymupdf.Font] = {}
 
     for page in doc:
@@ -53,26 +77,14 @@ def convert_pdf_inplace(src: Path, dst: Path, mode: str = MODE_AUTO) -> dict:
             for line in block["lines"]:
                 if tuple(round(x) for x in line.get("dir", (1, 0))) != (1, 0):
                     continue                      # rotated text: leave as is
-                for span in line["spans"]:
-                    text = span["text"]
-                    stats["spans_total"] += 1
-                    stats["text_chars"] += len(text)
-                    if not text.strip():
-                        continue
-                    new = convert(text, mode)
-                    if new == text:
-                        continue
-                    jobs.append((span, new))
-
+                jobs += _line_jobs(line, mode)
         if not jobs:
             continue
 
         for span, _ in jobs:
             r = pymupdf.Rect(span["bbox"])
-            # shrink vertically a little so neighbouring lines are never touched
-            pad = r.height * 0.08
-            r = pymupdf.Rect(r.x0, r.y0 + pad, r.x1, r.y1 - pad)
-            page.add_redact_annot(r)
+            pad = r.height * 0.08                 # never touch neighbouring lines
+            page.add_redact_annot(pymupdf.Rect(r.x0, r.y0 + pad, r.x1, r.y1 - pad))
         page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
                               graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
 
@@ -84,7 +96,7 @@ def convert_pdf_inplace(src: Path, dst: Path, mode: str = MODE_AUTO) -> dict:
             size = span["size"]
             avail = span["bbox"][2] - span["bbox"][0]
             width = font.text_length(new, fontsize=size)
-            if width > avail * 1.02 and avail > 0:       # should be rare: new text is usually shorter
+            if avail > 0 and width > avail * 1.02:   # rare: new text is usually shorter
                 size = size * avail / width
             tw = pymupdf.TextWriter(page.rect, color=_rgb(span["color"]))
             tw.append(span["origin"], new, font=font, fontsize=size)
@@ -93,5 +105,4 @@ def convert_pdf_inplace(src: Path, dst: Path, mode: str = MODE_AUTO) -> dict:
 
     doc.subset_fonts()
     doc.save(str(dst), garbage=3, deflate=True)
-    doc.close()
     return stats

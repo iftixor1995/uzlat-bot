@@ -19,7 +19,33 @@ from pathlib import Path
 
 from lxml import etree
 
+from .common import ConversionError
 from .translit import MODE_AUTO, convert_chars
+
+# zip-bomb guards for Office packages (all values far above any real document)
+MAX_ENTRIES = 5000
+MAX_UNCOMPRESSED = 150 * 1024 * 1024          # sum of all parts (media included)
+MAX_PART = 25 * 1024 * 1024                   # any single part (lxml needs ~25x for a DOM)
+MAX_RATIO = 200                               # uncompressed / compressed, for parts > 1 MB
+
+
+def check_package(path: Path) -> None:
+    """Reject archives that would explode in memory, before anything parses them."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            infos = z.infolist()
+    except zipfile.BadZipFile as e:
+        raise ConversionError("Fayl buzilgan yoki Office formatida emas.") from e
+    if len(infos) > MAX_ENTRIES:
+        raise ConversionError("Fayl tuzilişi juda murakkab.")
+    total = 0
+    for i in infos:
+        total += i.file_size
+        ratio = i.file_size / max(i.compress_size, 1)
+        if i.file_size > MAX_PART or (i.file_size > 1024 * 1024 and ratio > MAX_RATIO):
+            raise ConversionError("Fayl içidagi maʼlumot hajmi juda katta.")
+    if total > MAX_UNCOMPRESSED:
+        raise ConversionError("Fayl içidagi maʼlumot hajmi juda katta.")
 
 NS = {
     "s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -59,7 +85,7 @@ def _convert_unit(unit, text_tag: str, mode: str) -> bool:
     mapped = convert_chars(joined, mode)
     changed = False
     pos = 0
-    for t, s in zip(nodes, texts):
+    for t, s in zip(nodes, texts, strict=True):
         new = "".join(mapped[pos:pos + len(s)])
         pos += len(s)
         if new != s:
@@ -71,7 +97,7 @@ def _convert_unit(unit, text_tag: str, mode: str) -> bool:
 
 
 def _rewrite_part(data: bytes, unit_tag: str, text_tag: str, mode: str) -> bytes | None:
-    parser = etree.XMLParser(remove_blank_text=False, resolve_entities=False, huge_tree=True)
+    parser = etree.XMLParser(remove_blank_text=False, resolve_entities=False, no_network=True)
     root = etree.fromstring(data, parser)
     changed = False
     for unit in root.iter(unit_tag):
@@ -82,12 +108,16 @@ def _rewrite_part(data: bytes, unit_tag: str, text_tag: str, mode: str) -> bytes
 
 
 def _convert_package(src: Path, dst: Path, rules, mode: str) -> int:
+    check_package(src)
     compiled = [(re.compile(p), u, t) for p, u, t in rules]
     parts_changed = 0
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
         for info in zin.infolist():
             data = zin.read(info.filename)
             for rx, unit_tag, text_tag in compiled:
+                # worksheets hold text only as inline strings; most have none -> never parse them
+                if info.filename.startswith("xl/worksheets/") and b"<is>" not in data and b"<is " not in data:
+                    continue
                 if rx.match(info.filename):
                     new = _rewrite_part(data, unit_tag, text_tag, mode)
                     if new is not None:

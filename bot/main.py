@@ -1,44 +1,53 @@
 """
-Telegram bot: converts any text / .txt / .docx / .pdf / .xlsx / .pptx into the 2026 Uzbek Latin alphabet.
+Telegram bot that converts text and documents (txt, docx, pdf, xlsx, pptx, images)
+into the 2026 Uzbek Latin alphabet.
 
-Run:  BOT_TOKEN=... python -m bot.main
+Run (long polling):  BOT_TOKEN=... python -m bot.main
+Serverless webhook:  api/index.py
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import logging
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ChatAction, ParseMode
+from aiogram.enums import ChatAction, ChatType, ParseMode
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
     BufferedInputFile,
+    ErrorEvent,
     FSInputFile,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
 )
 
-from . import analytics, storage
-from .documents import SUPPORTED, convert_file
+from . import analytics, stats
+from .common import MAX_FILE_MB, TG_TEXT_LIMIT, ConversionError, safe_stem
+from .documents import SUPPORTED, NoTextInPDF, convert_file
+from .keyboard_help import BTN_KEYS
+from .prefs import get_mode, set_mode
+from .progress import working
 from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, convert
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("uzlat-bot")
 
-MAX_FILE_MB = 20                 # Bot API download limit
-TG_TEXT_LIMIT = 4096
+CONVERT_TIMEOUT = 240            # seconds; the serverless function is killed at 300
+LEGACY_FORMATS = {".doc", ".xls", ".ppt"}
 
-router = Router()
+router = Router(name="main")
 
-# --------------------------------------------------------------- modes & keyboard
+# ---------------------------------------------------------------- texts & keyboard
 MODE_LABELS = {
     MODE_CYR: "Кирилл → Özbek",
     MODE_LAT: "Oʻzbek → Özbek",
@@ -58,20 +67,12 @@ CONTACT_TEXT = (
     "hamkorlik uçun murojaat qiling:\n\n"
     + "\n".join(f"• {c}" for c in CONTACTS)
 )
-_LABEL_TO_MODE = {v: k for k, v in MODE_LABELS.items()}
-_LABEL_TO_MODE.update({f"✅ {v}": k for k, v in MODE_LABELS.items()})
-# labels from older keyboards still cached in users' clients
-for _old, _m in {"Avto (aralash)": MODE_AUTO}.items():
-    _LABEL_TO_MODE[_old] = _m
-    _LABEL_TO_MODE[f"✅ {_old}"] = _m
+FMT_LABEL = {".docx": "Word", ".pdf": "PDF", ".txt": "Matn", ".xlsx": "Excel", ".pptx": "PowerPoint"}
 
-async def get_mode(chat_id: int) -> str:
-    mode = await storage.get(f"mode:{chat_id}")
-    return mode if mode in MODE_LABELS else MODE_AUTO
-
-
-async def set_mode(chat_id: int, mode: str) -> None:
-    await storage.set(f"mode:{chat_id}", mode)
+_LABEL_TO_MODE: dict[str, str] = {}
+for _mode, _label in [*MODE_LABELS.items(), (MODE_AUTO, "Avto (aralash)")]:   # + label from old keyboards
+    _LABEL_TO_MODE[_label] = _mode
+    _LABEL_TO_MODE[f"✅ {_label}"] = _mode
 
 
 def keyboard(active: str) -> ReplyKeyboardMarkup:
@@ -83,7 +84,7 @@ def keyboard(active: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [btn(MODE_CYR), btn(MODE_LAT)],
             [btn(MODE_AUTO), KeyboardButton(text=BTN_HELP)],
-            [KeyboardButton(text=BTN_CONTACT)],
+            [KeyboardButton(text=BTN_KEYS), KeyboardButton(text=BTN_CONTACT)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -101,6 +102,9 @@ HELP = (
     "  • <b>.xlsx</b> — Excel: formula, format, diagrammalar saqlanadi\n"
     "  • <b>.pptx</b> — PowerPoint: slaydlar dizayni saqlanadi\n"
     "  • <b>.txt</b> — .txt qaytadi\n\n"
+    "📷 <b>Rasm</b> — hujjat suratini yoki skan PDF yuboring, matnini öqib, yangi alifboga ögiraman. "
+    "<i>Rasmlar matnni öqiş uçun Google Gemini xizmatiga yuboriladi.</i>\n\n"
+    "🔎 <b>Inline</b> — istalgan çatda <code>@new_aplhabet_bot matn</code> deb yozing.\n\n"
     "🔤 <b>Alifbo</b> — 2026-yil 21-oktabrdagi qonun (28 harf + tutuq belgisi ʼ): "
     "oʻ→ö, gʻ→ğ, sh→ş, ch→ç.\n\n"
     "⚙️ <b>Rejimlar</b>:\n"
@@ -109,43 +113,24 @@ HELP = (
     f"• <b>{MODE_LABELS[MODE_AUTO]}</b> — {MODE_HINT[MODE_AUTO]}\n\n"
     "Misol: <code>Ўздаверлойиҳа</code> → <code>Özdavyerloyiha</code>"
 )
+MSG_GENERIC_ERROR = "❌ Kutilmagan xatolik yuz berdi. Iltimos, birozdan keyin qayta urinib köring."
+MSG_FILE_ERROR = "❌ Faylni ögirişda xatolik. Fayl buzilmaganini tekşirib, qayta yuboring."
+MSG_TIMEOUT = "⌛️ Fayl juda uzoq işlandi. Kiçikroq qismlarga bölib yuboring."
+MSG_NOTHING = "Bu matnda ögiradigan narsa yöq — allaqaçon yangi alifboda ✅"
+MSG_UNKNOWN_CMD = "Bunday buyruq yöq. Yordam: /help"
+MSG_OTHER = "Matn yoki Word / PDF / Excel / PowerPoint / .txt fayl, yoki hujjat rasmini yuboring. Yordam: /help"
 
 
-# --------------------------------------------------------------- progress helpers
-async def _keep_action(bot: Bot, chat_id: int, action: ChatAction, stop: asyncio.Event) -> None:
-    """Telegram shows a chat action for ~5s; re-send it until the job is done."""
-    while not stop.is_set():
-        with contextlib.suppress(Exception):
-            await bot.send_chat_action(chat_id, action)
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(stop.wait(), timeout=4)
-
-
-@contextlib.asynccontextmanager
-async def working(bot: Bot, chat_id: int, action: ChatAction = ChatAction.UPLOAD_DOCUMENT):
-    stop = asyncio.Event()
-    task = asyncio.create_task(_keep_action(bot, chat_id, action, stop))
-    try:
-        yield
-    finally:
-        stop.set()
-        with contextlib.suppress(Exception):
-            await task
-
-
-_FMT_LABEL = {".docx": "Word", ".pdf": "PDF", ".txt": "matn", ".xlsx": "Excel", ".pptx": "PowerPoint"}
-
-
-# --------------------------------------------------------------- handlers
 def welcome_text(first_name: str | None) -> str:
-    name = f" {first_name}" if first_name else ""
+    name = f" {html.escape(first_name)}" if first_name else ""
     return (
         f"Assalomu alaykum,{name}! 👋\n\n"
         "Men <b>Yangi Alifbo</b> botiman — matn va hujjatlarni "
         "2026-yilgi yangi özbek lotin alifbosiga (<b>Ö Ğ Ş Ç</b>) ögirib beraman.\n\n"
         "📝 <b>Matn</b> yuboring — darhol ögirib qaytaraman.\n"
         "📄 <b>Fayl</b> yuboring — Word, PDF, Excel, PowerPoint yoki .txt (20 MB gaça). "
-        "Word faylda şrift, jadval va sarlavhalar öz holiça qoladi.\n\n"
+        "Word faylda şrift, jadval va sarlavhalar öz holiça qoladi.\n"
+        "📷 <b>Rasm</b> yuboring — hujjat suratidagi matnni öqib beraman.\n\n"
         "⚙️ Pastdagi tugmalar bilan rejimni tanlang:\n"
         f"  • <b>{MODE_LABELS[MODE_CYR]}</b> — kirill matn uçun\n"
         f"  • <b>{MODE_LABELS[MODE_LAT]}</b> — eski lotin (oʻ, gʻ, sh, ch) uçun\n"
@@ -154,6 +139,7 @@ def welcome_text(first_name: str | None) -> str:
     )
 
 
+# ---------------------------------------------------------------- commands & buttons
 @router.message(CommandStart())
 async def cmd_start(message: Message, command: CommandObject) -> None:
     first = message.from_user.first_name if message.from_user else None
@@ -177,75 +163,104 @@ async def cmd_help(message: Message) -> None:
 async def on_mode(message: Message) -> None:
     mode = _LABEL_TO_MODE[message.text]
     await set_mode(message.chat.id, mode)
-    await message.answer(
-        f"Rejim: <b>{MODE_LABELS[mode]}</b>\n{MODE_HINT[mode]}",
-        reply_markup=keyboard(mode),
-    )
+    await message.answer(f"Rejim: <b>{MODE_LABELS[mode]}</b>\n{MODE_HINT[mode]}", reply_markup=keyboard(mode))
 
 
+# ---------------------------------------------------------------- documents
 @router.message(F.document)
 async def on_document(message: Message, bot: Bot) -> None:
     doc = message.document
-    name = doc.file_name or "file"
-    ext = Path(name).suffix.lower()
+    ext = Path(doc.file_name or "").suffix.lower()
+    shown_name = html.escape(doc.file_name or "fayl")
     mode = await get_mode(message.chat.id)
 
-    if ext in {".xls", ".doc", ".ppt"}:
-        await message.reply(
-            f"<b>{ext}</b> — eski format. Faylni <b>{ext}x</b> qilib saqlab, qayta yuboring "
-            "(Fayl → Saqlaş → formatni tanlaş)."
-        )
+    if ext in LEGACY_FORMATS:
+        await message.reply(f"<b>{ext}</b> — eski format. Faylni <b>{ext}x</b> qilib saqlab, qayta yuboring "
+                            "(Fayl → Saqlaş → formatni tanlaş).")
         return
     if ext not in SUPPORTED:
-        await message.reply(
-            f"<b>{ext or 'bu'}</b> formatni qabul qilmayman. "
-            f"Qöllab-quvvatlanadi: {', '.join(sorted(SUPPORTED))}"
-        )
+        await message.reply(f"<b>{html.escape(ext) or 'Bu'}</b> formatni qabul qilmayman. "
+                            f"Qöllab-quvvatlanadi: {', '.join(sorted(SUPPORTED))} va rasmlar.")
         return
-    if doc.file_size and doc.file_size > MAX_FILE_MB * 1024 * 1024:
+    if (doc.file_size or 0) > MAX_FILE_MB * 1024 * 1024:
         await message.reply(f"Fayl juda katta. Çegara — {MAX_FILE_MB} MB.")
         return
 
-    size_kb = (doc.file_size or 0) // 1024
     status = await message.reply(
-        f"⏳ <b>{name}</b> qabul qilindi ({size_kb} KB).\n"
-        f"{_FMT_LABEL.get(ext, ext)} fayl ögirilyapti — rejim: <b>{MODE_LABELS[mode]}</b>…"
+        f"⏳ <b>{shown_name}</b> qabul qilindi ({(doc.file_size or 0) // 1024} KB).\n"
+        f"{FMT_LABEL[ext]} fayl ögirilyapti — rejim: <b>{MODE_LABELS[mode]}</b>…"
     )
     started = time.monotonic()
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        src = tmp_dir / name
+    tmp_dir = Path(tempfile.mkdtemp(prefix="uzlat-"))
+    job: asyncio.Future | None = None
+    try:
+        src = tmp_dir / f"{safe_stem(doc.file_name)}{ext}"     # never trust the client's path
         try:
             async with working(bot, message.chat.id):
                 await bot.download(doc, destination=src)
-                outputs = await asyncio.to_thread(convert_file, src, tmp_dir, mode)
-        except ValueError as e:
-            await status.edit_text(f"⚠️ {e}")
+                job = asyncio.ensure_future(asyncio.to_thread(convert_file, src, tmp_dir, mode))
+                # shield: on timeout we stop waiting, but the worker thread keeps its files
+                outputs = await asyncio.wait_for(asyncio.shield(job), timeout=CONVERT_TIMEOUT)
+        except NoTextInPDF as e:
+            from .ocr import enabled as ocr_enabled, ocr_and_reply
+            if not ocr_enabled():
+                await status.edit_text(f"⚠️ {e}")
+                return
+            await _safe_delete(status)
+            await ocr_and_reply(message, bot, src.read_bytes(), "application/pdf", src.stem, mode,
+                                always_files=True)
+            return
+        except ConversionError as e:
+            await status.edit_text(f"⚠️ {html.escape(str(e))}")
+            return
+        except asyncio.TimeoutError:
+            log.warning("conversion timed out: %s (%s bytes)", ext, doc.file_size)
+            await status.edit_text(MSG_TIMEOUT)
             return
         except Exception:
-            log.exception("convert failed: %s", name)
-            await status.edit_text("❌ Faylni ögirişda xatolik. Fayl buzilmaganini tekşirib, qayta yuboring.")
+            log.exception("conversion failed: %s", ext)
+            await status.edit_text(MSG_FILE_ERROR)
             return
 
-        async with working(bot, message.chat.id):
-            caption = f"Yangi alifboda ✅  ·  {MODE_LABELS[mode]}"
-            for i, out in enumerate(outputs):
-                await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None)
-    elapsed = time.monotonic() - started
-    with contextlib.suppress(Exception):
-        await status.edit_text(f"✅ Tayyor — {elapsed:.1f} s.")
-    log.info("converted %s (%s, %s) for %s", name, ext, mode, message.from_user.id if message.from_user else "?")
+        try:
+            async with working(bot, message.chat.id):
+                caption = f"Yangi alifboda ✅  ·  {MODE_LABELS[mode]}"
+                for i, out in enumerate(outputs):
+                    await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None)
+        except Exception:
+            log.exception("sending result failed")
+            with contextlib.suppress(Exception):
+                await status.edit_text(MSG_GENERIC_ERROR)
+            return
+        with contextlib.suppress(Exception):
+            await status.edit_text(f"✅ Tayyor — {time.monotonic() - started:.1f} s.")
+    finally:
+        if job is not None and not job.done():               # timed out: clean up when the thread ends
+            job.add_done_callback(lambda _f: shutil.rmtree(tmp_dir, ignore_errors=True))
+        else:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+    await stats.event(ext.lstrip("."))
+
+
+# ---------------------------------------------------------------- text
+@router.message(F.text.startswith("/"))
+async def on_unknown_command(message: Message) -> None:
+    if message.chat.type == ChatType.PRIVATE:
+        await message.reply(MSG_UNKNOWN_CMD)
 
 
 @router.message(F.text)
 async def on_text(message: Message, bot: Bot) -> None:
+    private = message.chat.type == ChatType.PRIVATE
     mode = await get_mode(message.chat.id)
     if len(message.text) > 1500:
         await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
     result = convert(message.text, mode)
     if result == message.text:
-        await message.reply("Bu matnda ögiradigan narsa yöq — allaqaçon yangi alifboda ✅")
+        if private:                         # in groups stay silent instead of spamming
+            await message.reply(MSG_NOTHING)
         return
+    await stats.event("text")
     if len(result) <= TG_TEXT_LIMIT:
         await message.reply(result, parse_mode=None)
     else:
@@ -257,12 +272,20 @@ async def on_text(message: Message, bot: Bot) -> None:
 
 @router.message()
 async def on_other(message: Message) -> None:
-    await message.reply("Matn yoki Word / PDF / Excel / PowerPoint / .txt fayl yuboring. Yordam: /help")
+    if message.chat.type == ChatType.PRIVATE:
+        await message.reply(MSG_OTHER)
 
 
+async def _safe_delete(msg: Message) -> None:
+    with contextlib.suppress(Exception):
+        await msg.delete()
+
+
+# ---------------------------------------------------------------- wiring
 COMMANDS = [
     BotCommand(command="start", description="Boşlaş"),
     BotCommand(command="help", description="Yordam va rejimlar"),
+    BotCommand(command="keyboard", description="Ö Ğ Ş Ç qanday yoziladi"),
     BotCommand(command="contact", description="Taklif va murojaat"),
 ]
 
@@ -270,13 +293,42 @@ COMMANDS = [
 def make_bot(token: str | None = None) -> Bot:
     token = token or os.environ.get("BOT_TOKEN")
     if not token:
-        raise SystemExit("BOT_TOKEN env özgaruvçisi berilmagan")
-    return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        raise RuntimeError("BOT_TOKEN environment variable is not set")
+    return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML,
+                                                   allow_sending_without_reply=True))
+
+
+async def on_error(event: ErrorEvent) -> bool:
+    """Last line of defence: log, and never leave the user without an answer."""
+    log.exception("unhandled error", exc_info=event.exception)
+    msg = event.update.message
+    if msg and msg.chat.type == ChatType.PRIVATE:
+        with contextlib.suppress(Exception):
+            await msg.answer(MSG_GENERIC_ERROR)
+    elif event.update.callback_query:
+        with contextlib.suppress(Exception):
+            await event.update.callback_query.answer(MSG_GENERIC_ERROR, show_alert=True)
+    return True
+
+
+_dispatcher: Dispatcher | None = None
 
 
 def build_dispatcher() -> Dispatcher:
+    """Routers can be attached only once, so the dispatcher is a process-wide singleton."""
+    global _dispatcher
+    if _dispatcher is not None:
+        return _dispatcher
+    from . import admin, inline, keyboard_help, ocr
+
     dp = Dispatcher()
-    dp.include_router(router)
+    tracker = stats.UserTracker()
+    for observer in (dp.message, dp.inline_query, dp.callback_query):
+        observer.outer_middleware(tracker)
+    dp.errors.register(on_error)
+    # specific routers first; `router` ends with catch-all handlers
+    dp.include_routers(admin.router, keyboard_help.router, inline.router, ocr.router, router)
+    _dispatcher = dp
     return dp
 
 
@@ -287,7 +339,7 @@ async def main() -> None:
     await bot.set_my_commands(COMMANDS)
     await bot.delete_webhook(drop_pending_updates=False)
     log.info("bot started (polling)")
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=["message", "inline_query", "callback_query"])
 
 
 if __name__ == "__main__":
