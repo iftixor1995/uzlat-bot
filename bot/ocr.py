@@ -9,6 +9,7 @@ Env:
 from __future__ import annotations
 
 import base64
+import html
 import io
 import logging
 import os
@@ -54,7 +55,11 @@ PROMPT = (
 
 
 class OCRError(Exception):
-    """User-facing OCR failure; str(e) is shown to the user."""
+    """User-facing OCR failure; str(e) is shown to the user, `detail` only to admins."""
+
+    def __init__(self, message: str, detail: str = "") -> None:
+        super().__init__(message)
+        self.detail = detail
 
 
 def enabled() -> bool:
@@ -74,6 +79,32 @@ async def _post(model: str, body: dict) -> tuple[int, dict]:
         return 0, {}
 
 
+LIST_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200"
+
+
+async def _discover_models() -> list[str]:
+    """Ask the API which models this key may use; newest 'flash' models first."""
+    try:
+        async with aiohttp.ClientSession() as s, s.get(
+                LIST_ENDPOINT, headers={"x-goog-api-key": API_KEY},
+                timeout=aiohttp.ClientTimeout(total=20)) as r:
+            payload = await r.json(content_type=None)
+    except Exception:
+        log.exception("gemini list models failed")
+        return []
+    names = []
+    for m in payload.get("models") or []:
+        name = str(m.get("name", "")).removeprefix("models/")
+        methods = m.get("supportedGenerationMethods") or []
+        if "generateContent" in methods and "flash" in name and not any(
+                bad in name for bad in ("image", "tts", "live", "audio", "embedding", "thinking")):
+            names.append(name)
+    # stable names before previews/experiments, higher version first
+    names.sort(key=lambda n: ("preview" in n or "exp" in n, "lite" in n, [-ord(c) for c in n]))
+    log.info("gemini models available: %s", names[:10])
+    return names
+
+
 async def extract_text(data: bytes, mime: str) -> str:
     if len(data) > MAX_BYTES:
         raise OCRError(convert("Fayl OCR uchun juda katta (14 MB gacha)."))
@@ -86,21 +117,32 @@ async def extract_text(data: bytes, mime: str) -> str:
     }
     global _working_model
     order = ([_working_model] if _working_model else []) + [m for m in MODELS if m != _working_model]
-    status, payload = 0, {}
-    for model in order:
+    status, payload, tried = 0, {}, []
+    discovered = False
+    while order:
+        model = order.pop(0)
+        if model in tried:
+            continue
+        tried.append(model)
         status, payload = await _post(model, body)
         if status == 404:                      # model retired / unknown for this key: try the next
-            log.warning("gemini model %s unavailable, trying next", model)
+            log.warning("gemini model %s unavailable", model)
+            if not order and not discovered:
+                discovered = True
+                order = [m for m in await _discover_models() if m not in tried]
             continue
-        if status < 400:
+        if status < 400 and status != 0:
+            if _working_model != model:
+                log.info("gemini model in use: %s", model)
             _working_model = model
         break
 
+    detail = f"HTTP {status} ({tried[-1] if tried else '-'}): {str(payload.get('error', payload))[:300]}"
     if status == 429:
-        raise OCRError(convert("Bugungi OCR limiti tugadi. Ertaga qayta urinib ko'ring."))
+        raise OCRError(convert("Bugungi OCR limiti tugadi. Ertaga qayta urinib ko'ring."), detail)
     if status >= 400 or status == 0:
-        log.error("gemini HTTP %s: %s", status, str(payload)[:500])
-        raise OCRError(convert("Rasmni o'qib bo'lmadi. Boshqa, aniqroq surat yuboring."))
+        log.error("gemini failed, tried %s: %s", tried, detail)
+        raise OCRError(convert("Rasmni o'qib bo'lmadi. Boshqa, aniqroq surat yuboring."), detail)
 
     parts = (((payload.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [])
     return "".join(p.get("text", "") for p in parts).strip()
@@ -131,7 +173,10 @@ async def ocr_and_reply(message: Message, bot: Bot, data: bytes, mime: str, stem
         async with working(bot, message.chat.id, ChatAction.TYPING):
             raw = await extract_text(data, mime)
     except OCRError as e:
-        await status.edit_text(f"⚠️ {e}")
+        text = f"⚠️ {e}"
+        if e.detail and message.from_user and admin.is_admin(message.from_user.id):
+            text += f"\n\n<code>{html.escape(e.detail)}</code>"
+        await status.edit_text(text)
         return
     if not raw:
         await status.edit_text(convert("🤷 Rasmda matn topilmadi."))
