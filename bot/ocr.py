@@ -157,7 +157,12 @@ async def on_photo(message: Message, bot: Bot) -> None:
     await ocr_and_reply(message, bot, data, "image/jpeg", "rasm", await get_mode(message.chat.id))
 
 
-@router.message(F.document.func(lambda d: Path(d.file_name or "").suffix.lower() in IMAGE_EXT))
+def _is_image_document(message: Message) -> bool:
+    doc = message.document
+    return doc is not None and Path(doc.file_name or "").suffix.lower() in IMAGE_EXT
+
+
+@router.message(_is_image_document)
 async def on_image_file(message: Message, bot: Bot) -> None:
     doc = message.document
     if (doc.file_size or 0) > MAX_FILE_MB * 1024 * 1024:
