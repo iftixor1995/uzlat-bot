@@ -10,7 +10,7 @@ Telegram bot: kirill yoki eski lotin (1995) yozuvidagi matn va fayllarni
 | `.docx` | `.docx` — formatlash (shrift, qalin/kursiv, jadval, sarlavha, kolontitul, izoh) to'liq saqlanadi |
 | `.xlsx` | `.xlsx` — XML darajasida o'giriladi: katak matnlari, rich text, izohlar, diagramma sarlavhalari, shakllardagi matn. Formulalar, format, diagrammalar, rasmlar, filtrlar bayt-babayt saqlanadi. Varaq nomlari o'zgartirilmaydi (formulalar ularga bog'langan) |
 | `.pptx` | `.pptx` — slaydlar, izohlar (notes), diagramma va SmartArt matni; dizayn o'zgarmaydi |
-| `.pdf` | `.pdf` + `.docx` — PDF **joyida** o'giriladi (rasm, tartib, shrift, rang saqlanadi; Times → Liberation Serif, Arial → Liberation Sans). Word nusxasi `pdf2docx` bilan rasmlar va jadvallar saqlangan holda yasalib, keyin o'giriladi. Skan PDF ishlamaydi |
+| `.pdf` | `.pdf` + `.docx` — PDF **joyida** o'giriladi (rasm, tartib, shrift, rang saqlanadi; Times → Liberation Serif, Arial → Liberation Sans). Word nusxasi PyMuPDF orqali qayta quriladi: matn (qalin/kursiv/o'lcham/rang/shrift) va rasmlar o'z o'rnida. Skan PDF ishlamaydi |
 
 ## Ishga tushirish
 
