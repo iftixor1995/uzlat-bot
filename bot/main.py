@@ -26,16 +26,15 @@ from aiogram.types import (
     BufferedInputFile,
     ErrorEvent,
     FSInputFile,
-    KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
 )
 
 from . import analytics, stats
 from .common import MAX_FILE_MB, TG_TEXT_LIMIT, ConversionError, safe_stem
 from .documents import SUPPORTED, NoTextInPDF, convert_file
-from .keyboard_help import BTN_KEYS
 from .prefs import get_mode, set_mode
+from .ui import (BTN_CONTACT, BTN_HELP, CONTACT_TEXT, MODE_HINT, MODE_LABELS, LABEL_TO_MODE,
+                 kb_for, keyboard)
 from .progress import working
 from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, convert
 
@@ -48,48 +47,7 @@ LEGACY_FORMATS = {".doc", ".xls", ".ppt"}
 router = Router(name="main")
 
 # ---------------------------------------------------------------- texts & keyboard
-MODE_LABELS = {
-    MODE_CYR: "Кирилл → Özbek",
-    MODE_LAT: "Oʻzbek → Özbek",
-    MODE_AUTO: "Avto (aralaş)",
-}
-MODE_HINT = {
-    MODE_CYR: "Faqat kirill harflari ögiriladi, lotinça matn tegilmaydi.",
-    MODE_LAT: "Faqat eski lotin (oʻ gʻ sh ch) ögiriladi, kirill tegilmaydi.",
-    MODE_AUTO: "Kirill ham, eski lotin ham — hammasi yangi alifboga ögiriladi.",
-}
-BTN_HELP = "ℹ️ Yordam"
-BTN_CONTACT = "✉️ Taklif va murojaat"
-CONTACTS = ("@Ixtiyorivich", "@KozimTN")
-CONTACT_TEXT = (
-    "✉️ <b>Taklif va murojaatlar</b>\n\n"
-    "Botni rivojlantiriş böyiça taklif, xato haqida xabar yoki "
-    "hamkorlik uçun murojaat qiling:\n\n"
-    + "\n".join(f"• {c}" for c in CONTACTS)
-)
 FMT_LABEL = {".docx": "Word", ".pdf": "PDF", ".txt": "Matn", ".xlsx": "Excel", ".pptx": "PowerPoint"}
-
-_LABEL_TO_MODE: dict[str, str] = {}
-for _mode, _label in [*MODE_LABELS.items(), (MODE_AUTO, "Avto (aralash)")]:   # + label from old keyboards
-    _LABEL_TO_MODE[_label] = _mode
-    _LABEL_TO_MODE[f"✅ {_label}"] = _mode
-
-
-def keyboard(active: str) -> ReplyKeyboardMarkup:
-    def btn(mode: str) -> KeyboardButton:
-        label = MODE_LABELS[mode]
-        return KeyboardButton(text=f"✅ {label}" if mode == active else label)
-
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [btn(MODE_CYR), btn(MODE_LAT)],
-            [btn(MODE_AUTO), KeyboardButton(text=BTN_HELP)],
-            [KeyboardButton(text=BTN_KEYS), KeyboardButton(text=BTN_CONTACT)],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Matn yozing yoki fayl yuboring…",
-    )
 
 
 HELP = (
@@ -159,9 +117,9 @@ async def cmd_help(message: Message) -> None:
     await message.answer(HELP, reply_markup=keyboard(await get_mode(message.chat.id)))
 
 
-@router.message(F.text.in_(_LABEL_TO_MODE))
+@router.message(F.text.in_(LABEL_TO_MODE))
 async def on_mode(message: Message) -> None:
-    mode = _LABEL_TO_MODE[message.text]
+    mode = LABEL_TO_MODE[message.text]
     await set_mode(message.chat.id, mode)
     await message.answer(f"Rejim: <b>{MODE_LABELS[mode]}</b>\n{MODE_HINT[mode]}", reply_markup=keyboard(mode))
 
@@ -176,14 +134,15 @@ async def on_document(message: Message, bot: Bot) -> None:
 
     if ext in LEGACY_FORMATS:
         await message.reply(f"<b>{ext}</b> — eski format. Faylni <b>{ext}x</b> qilib saqlab, qayta yuboring "
-                            "(Fayl → Saqlaş → formatni tanlaş).")
+                            "(Fayl → Saqlaş → formatni tanlaş).", reply_markup=await kb_for(message))
         return
     if ext not in SUPPORTED:
         await message.reply(f"<b>{html.escape(ext) or 'Bu'}</b> formatni qabul qilmayman. "
-                            f"Qöllab-quvvatlanadi: {', '.join(sorted(SUPPORTED))} va rasmlar.")
+                            f"Qöllab-quvvatlanadi: {', '.join(sorted(SUPPORTED))} va rasmlar.",
+                            reply_markup=await kb_for(message))
         return
     if (doc.file_size or 0) > MAX_FILE_MB * 1024 * 1024:
-        await message.reply(f"Fayl juda katta. Çegara — {MAX_FILE_MB} MB.")
+        await message.reply(f"Fayl juda katta. Çegara — {MAX_FILE_MB} MB.", reply_markup=await kb_for(message))
         return
 
     status = await message.reply(
@@ -225,8 +184,10 @@ async def on_document(message: Message, bot: Bot) -> None:
         try:
             async with working(bot, message.chat.id):
                 caption = f"Yangi alifboda ✅  ·  {MODE_LABELS[mode]}"
+                markup = await kb_for(message)
                 for i, out in enumerate(outputs):
-                    await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None)
+                    await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None,
+                                                 reply_markup=markup)
         except Exception:
             log.exception("sending result failed")
             with contextlib.suppress(Exception):
@@ -246,7 +207,7 @@ async def on_document(message: Message, bot: Bot) -> None:
 @router.message(F.text.startswith("/"))
 async def on_unknown_command(message: Message) -> None:
     if message.chat.type == ChatType.PRIVATE:
-        await message.reply(MSG_UNKNOWN_CMD)
+        await message.reply(MSG_UNKNOWN_CMD, reply_markup=await kb_for(message))
 
 
 @router.message(F.text)
@@ -258,22 +219,23 @@ async def on_text(message: Message, bot: Bot) -> None:
     result = convert(message.text, mode)
     if result == message.text:
         if private:                         # in groups stay silent instead of spamming
-            await message.reply(MSG_NOTHING)
+            await message.reply(MSG_NOTHING, reply_markup=await kb_for(message))
         return
     await stats.event("text")
     if len(result) <= TG_TEXT_LIMIT:
-        await message.reply(result, parse_mode=None)
+        await message.reply(result, parse_mode=None, reply_markup=await kb_for(message))
     else:
         await message.reply_document(
             BufferedInputFile(result.encode("utf-8"), filename="yangi_alifbo.txt"),
             caption="Matn uzun bölgani uçun fayl holida.",
+            reply_markup=await kb_for(message),
         )
 
 
 @router.message()
 async def on_other(message: Message) -> None:
     if message.chat.type == ChatType.PRIVATE:
-        await message.reply(MSG_OTHER)
+        await message.reply(MSG_OTHER, reply_markup=await kb_for(message))
 
 
 async def _safe_delete(msg: Message) -> None:

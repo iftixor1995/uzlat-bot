@@ -23,6 +23,7 @@ from aiogram.types import BufferedInputFile, FSInputFile, Message
 from . import admin, stats, storage
 from .common import MAX_FILE_MB, TG_TEXT_LIMIT, safe_stem, text_to_docx
 from .prefs import get_mode
+from .ui import kb_for
 from .progress import working
 from .translit import MODE_AUTO, convert
 
@@ -105,7 +106,7 @@ async def ocr_and_reply(message: Message, bot: Bot, data: bytes, mime: str, stem
     """Run OCR, convert and reply. Short results come back as a message, long ones
     (or scanned PDFs) as .docx + .txt."""
     if not enabled():
-        await message.reply(convert("📷 Rasmdan matn o'qish hozircha yoqilmagan."))
+        await message.reply(convert("📷 Rasmdan matn o'qish hozircha yoqilmagan."), reply_markup=await kb_for(message))
         return
     status = await message.reply(convert("⏳ Rasmdagi matn o'qilyapti…"))
     try:
@@ -125,15 +126,18 @@ async def ocr_and_reply(message: Message, bot: Bot, data: bytes, mime: str, stem
     await stats.event("ocr")
     if not always_files and len(text) <= TG_TEXT_LIMIT:
         await _safe_delete(status)
-        await message.reply(text, parse_mode=None)
+        await message.reply(text, parse_mode=None, reply_markup=await kb_for(message))
         return
 
     with tempfile.TemporaryDirectory() as tmp:
         docx_path = Path(tmp) / f"{stem}_yangi.docx"
         text_to_docx(text, docx_path)
+        markup = await kb_for(message)
         await message.reply_document(FSInputFile(docx_path),
-                                     caption=convert("📷 Rasmdan o'qildi va yangi alifboga o'girildi ✅"))
-        await message.reply_document(BufferedInputFile(text.encode("utf-8"), filename=f"{stem}_yangi.txt"))
+                                     caption=convert("📷 Rasmdan o'qildi va yangi alifboga o'girildi ✅"),
+                                     reply_markup=markup)
+        await message.reply_document(BufferedInputFile(text.encode("utf-8"), filename=f"{stem}_yangi.txt"),
+                                     reply_markup=markup)
     await _safe_delete(status)
 
 
@@ -166,7 +170,7 @@ def _is_image_document(message: Message) -> bool:
 async def on_image_file(message: Message, bot: Bot) -> None:
     doc = message.document
     if (doc.file_size or 0) > MAX_FILE_MB * 1024 * 1024:
-        await message.reply(convert(f"Fayl juda katta. Chegara — {MAX_FILE_MB} MB."))
+        await message.reply(convert(f"Fayl juda katta. Chegara — {MAX_FILE_MB} MB."), reply_markup=await kb_for(message))
         return
     ext = Path(doc.file_name).suffix.lower()
     data = await _download(bot, doc)

@@ -13,6 +13,7 @@ from aiogram.methods import AnswerCallbackQuery, AnswerInlineQuery, EditMessageT
 from aiogram.types import Message, Update
 
 from bot import main
+from bot.keyboard_help import BTN_KEYS
 
 
 class FakeSession(BaseSession):
@@ -79,7 +80,7 @@ STICKER = {"file_id": "s", "file_unique_id": "s", "type": "regular", "width": 51
     ("sticker", _msg(sticker=STICKER), "/help"),
     ("start", _msg(text="/start", entities=[{"type": "bot_command", "offset": 0, "length": 6}]), "Assalomu"),
     ("help button", _msg(text=main.BTN_HELP), "Qanday"),
-    ("keyboard button", _msg(text=main.BTN_KEYS), "Ö Ğ Ş Ç"),
+    ("keyboard button", _msg(text=BTN_KEYS), "Ö Ğ Ş Ç"),
     ("contact button", _msg(text=main.BTN_CONTACT), "@Ixtiyorivich"),
     ("mode button", _msg(text="Кирилл → Özbek"), "Rejim"),
     ("unknown command", _msg(text="/nope", entities=[{"type": "bot_command", "offset": 0, "length": 5}]), "buyruq"),
@@ -104,3 +105,23 @@ def test_inline_query_and_callback_route_without_errors(run_update):
                                    "message": {"message_id": 5, "date": 0, "chat": {"id": 1, "type": "private"},
                                                "text": "x"}}})
     assert errors == []
+
+
+from aiogram.types import ReplyKeyboardMarkup  # noqa: E402
+
+
+@pytest.mark.parametrize("payload", [_msg(text="шаҳар"), _msg(text="bot"), _msg(sticker=STICKER),
+                                     _msg(text="/nope", entities=[{"type": "bot_command", "offset": 0, "length": 5}])])
+def test_keyboard_is_attached_to_every_private_answer(run_update, payload):
+    calls = run_update(payload)
+    replies = [c for c in calls if hasattr(c, "text") and not isinstance(c, EditMessageText)]
+    assert replies and all(isinstance(c.reply_markup, ReplyKeyboardMarkup) for c in replies)
+    labels = [b.text for row in replies[-1].reply_markup.keyboard for b in row]
+    assert BTN_KEYS in labels and main.BTN_CONTACT in labels
+
+
+def test_no_keyboard_in_groups(run_update):
+    payload = _msg(text="шаҳар")
+    payload["message"]["chat"] = {"id": -100, "type": "supergroup", "title": "g"}
+    calls = run_update(payload)
+    assert all(getattr(c, "reply_markup", None) is None for c in calls if hasattr(c, "text"))
