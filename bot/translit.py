@@ -172,7 +172,8 @@ def _is_cyr_e_iotated(text: str, i: int) -> bool:
 MODE_AUTO = "auto"      # Cyrillic + old Latin -> new Latin
 MODE_CYR = "cyr"        # only Cyrillic letters are converted; Latin text untouched
 MODE_LAT = "lat"        # only 1995-Latin digraphs are converted; Cyrillic untouched
-MODES = (MODE_AUTO, MODE_CYR, MODE_LAT)
+MODE_TO_CYR = "tocyr"   # reverse: new (or 1995) Latin -> Uzbek Cyrillic
+MODES = (MODE_AUTO, MODE_CYR, MODE_LAT, MODE_TO_CYR)
 
 
 def _has_cyr(word: str) -> bool:
@@ -182,6 +183,8 @@ def _has_cyr(word: str) -> bool:
 def convert_chars(text: str, mode: str = MODE_AUTO) -> list[str]:
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}")
+    if mode == MODE_TO_CYR:
+        return to_cyr_chars(text)
     n = len(text)
     out: list[str] = [""] * n
     done = [False] * n
@@ -278,3 +281,99 @@ def convert_chars(text: str, mode: str = MODE_AUTO) -> list[str]:
 def convert(text: str, mode: str = MODE_AUTO) -> str:
     return "".join(convert_chars(text, mode))
 
+
+
+# ================================================================ Latin -> Cyrillic
+_LAT_SIMPLE = {
+    "a": "а", "b": "б", "d": "д", "e": "е", "f": "ф", "g": "г", "h": "ҳ", "i": "и",
+    "j": "ж", "k": "к", "l": "л", "m": "м", "n": "н", "o": "о", "p": "п", "q": "қ",
+    "r": "р", "s": "с", "t": "т", "u": "у", "v": "в", "x": "х", "y": "й", "z": "з",
+    "c": "ц", "w": "в",
+    "ö": "ў", "ğ": "ғ", "ş": "ш", "ç": "ч",
+}
+_LAT_Y_VOWEL = {"o": "ё", "u": "ю", "a": "я", "e": "е"}
+_LAT_VOWELS = set("aeiouöAEIOUÖ")
+_NEW_LETTERS = set("öğşçÖĞŞÇ")
+_OKINA_ONLY = "ʻ‘'`´’"                  # after o/g these mean oʻ/gʻ;  ʼ (U+02BC) stays tutuq
+# Words whose Cyrillic spelling keeps ь / я that the Latin form lost
+_REV_EXCEPTIONS = {
+    "yanvar": "январь", "fevral": "февраль", "aprel": "апрель", "iyun": "июнь",
+    "iyul": "июль", "sentabr": "сентябрь", "oktabr": "октябрь", "noyabr": "ноябрь",
+    "dekabr": "декабрь", "sentyabr": "сентябрь", "oktyabr": "октябрь",
+}
+
+
+def _cyr_case(out: str, text: str, i: int) -> str:
+    if not _is_upper(text[i]) or not out:
+        return out
+    return out.upper()
+
+
+def to_cyr_chars(text: str) -> list[str]:
+    """New 2026 Latin (and 1995 Latin) -> Uzbek Cyrillic, one output per input char.
+    If the text already uses Ö Ğ Ş Ç, 'sh'/'ch' are read as two letters (Ishoq -> Исҳоқ);
+    otherwise they are treated as 1995 digraphs (shahar -> шаҳар)."""
+    n = len(text)
+    out: list[str] = [""] * n
+    done = [False] * n
+    old_digraphs = not any(c in _NEW_LETTERS for c in text)
+
+    for m in _PROTECTED_RE.finditer(text):
+        for k in range(m.start(), m.end()):
+            out[k], done[k] = text[k], True
+
+    for m in _WORD_RE.finditer(text):
+        repl = _REV_EXCEPTIONS.get(m.group().lower())
+        if repl and not done[m.start()]:
+            w = m.group()
+            out[m.start()] = repl.upper() if w.isupper() and len(w) > 1 else (
+                repl[0].upper() + repl[1:] if w[0].isupper() else repl)
+            for k in range(m.start(), m.end()):
+                done[k] = True
+
+    i = 0
+    while i < n:
+        if done[i]:
+            i += 1
+            continue
+        ch = text[i]
+        low = ch.lower()
+        nxt = text[i + 1] if i + 1 < n else ""
+        nxt_low = nxt.lower()
+        prev = text[i - 1] if i > 0 else ""
+
+        if low not in _LAT_SIMPLE:
+            # tutuq / apostrophe between letters -> ъ
+            if ch in _OKINA_MARKS and prev.isalpha() and nxt.isalpha():
+                out[i] = "ъ"
+            else:
+                out[i] = ch
+            i += 1
+            continue
+
+        # oʻ / gʻ (1995)
+        if low in "og" and nxt and nxt in _OKINA_ONLY:
+            out[i] = _cyr_case("ў" if low == "o" else "ғ", text, i)
+            out[i + 1] = ""
+            i += 2
+            continue
+        # sh / ch (1995) and sʼh -> сҳ
+        if old_digraphs and low in "sc" and nxt_low == "h":
+            out[i] = _cyr_case("ш" if low == "s" else "ч", text, i)
+            out[i + 1] = ""
+            i += 2
+            continue
+        # yo yu ya ye -> ё ю я е
+        if low == "y" and nxt_low in _LAT_Y_VOWEL:
+            out[i] = _cyr_case(_LAT_Y_VOWEL[nxt_low], text, i)
+            out[i + 1] = ""
+            i += 2
+            continue
+        # e -> э at word start and after a vowel (ekran, poeziya), else е
+        if low == "e" and (not prev.isalpha() or prev in _LAT_VOWELS):
+            out[i] = _cyr_case("э", text, i)
+            i += 1
+            continue
+        out[i] = _cyr_case(_LAT_SIMPLE[low], text, i)
+        i += 1
+    return out

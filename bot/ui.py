@@ -6,17 +6,19 @@ from aiogram.types import KeyboardButton, Message, ReplyKeyboardMarkup
 
 from .keyboard_help import BTN_KEYS
 from .prefs import get_mode
-from .translit import MODE_AUTO, MODE_CYR, MODE_LAT
+from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, MODE_TO_CYR
 
 MODE_LABELS = {
     MODE_CYR: "Кирилл → Özbek",
     MODE_LAT: "Oʻzbek → Özbek",
     MODE_AUTO: "Avto (aralaş)",
+    MODE_TO_CYR: "Özbek → Кирилл",
 }
 MODE_HINT = {
     MODE_CYR: "Faqat kirill harflari ögiriladi, lotinça matn tegilmaydi.",
     MODE_LAT: "Faqat eski lotin (oʻ gʻ sh ch) ögiriladi, kirill tegilmaydi.",
     MODE_AUTO: "Kirill ham, eski lotin ham — hammasi yangi alifboga ögiriladi.",
+    MODE_TO_CYR: "Yangi (yoki eski) lotin yozuvidagi matn kirill alifbosiga ögiriladi.",
 }
 BTN_HELP = "ℹ️ Yordam"
 BTN_CONTACT = "✉️ Taklif va murojaat"
@@ -42,8 +44,9 @@ def keyboard(active: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [btn(MODE_CYR), btn(MODE_LAT)],
-            [btn(MODE_AUTO), KeyboardButton(text=BTN_HELP)],
-            [KeyboardButton(text=BTN_KEYS), KeyboardButton(text=BTN_CONTACT)],
+            [btn(MODE_AUTO), btn(MODE_TO_CYR)],
+            [KeyboardButton(text=BTN_HELP), KeyboardButton(text=BTN_KEYS)],
+            [KeyboardButton(text=BTN_CONTACT)],
         ],
         resize_keyboard=True,
         is_persistent=True,

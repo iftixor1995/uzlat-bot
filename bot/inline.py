@@ -16,7 +16,7 @@ from aiogram.types import (
 )
 
 from . import stats, storage
-from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, convert
+from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, MODE_TO_CYR, convert
 
 router = Router(name="inline")
 
@@ -54,6 +54,7 @@ async def on_inline(q: InlineQuery) -> None:
         (MODE_AUTO, "✅ Yangi alifboda"),
         (MODE_CYR, convert("Faqat kirill o'girilgan")),
         (MODE_LAT, convert("Faqat eski lotin o'girilgan")),
+        (MODE_TO_CYR, "🔁 Кириллча"),
     ]
     for mode, title in variants:
         out = convert(src, mode)[:MAX_LEN]

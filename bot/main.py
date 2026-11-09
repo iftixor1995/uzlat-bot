@@ -37,7 +37,7 @@ from .prefs import get_mode, set_mode
 from .ui import (BTN_CONTACT, BTN_HELP, CONTACT_TEXT, MODE_HINT, MODE_LABELS, LABEL_TO_MODE,
                  kb_for, keyboard)
 from .progress import working
-from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, convert
+from .translit import MODE_AUTO, MODE_CYR, MODE_LAT, MODE_TO_CYR, convert
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("uzlat-bot")
@@ -68,7 +68,8 @@ HELP = (
     "⚙️ <b>Rejimlar</b>:\n"
     f"• <b>{MODE_LABELS[MODE_CYR]}</b> — {MODE_HINT[MODE_CYR]}\n"
     f"• <b>{MODE_LABELS[MODE_LAT]}</b> — {MODE_HINT[MODE_LAT]}\n"
-    f"• <b>{MODE_LABELS[MODE_AUTO]}</b> — {MODE_HINT[MODE_AUTO]}\n\n"
+    f"• <b>{MODE_LABELS[MODE_AUTO]}</b> — {MODE_HINT[MODE_AUTO]}\n"
+    f"• <b>{MODE_LABELS[MODE_TO_CYR]}</b> — {MODE_HINT[MODE_TO_CYR]}\n\n"
     "Misol: <code>Ўздаверлойиҳа</code> → <code>Özdavyerloyiha</code>"
 )
 _HELP_OCR = ("📷 <b>Rasm</b> — hujjat suratini yoki skan PDF yuboring, matnini öqib, yangi alifboga ögiraman. "
@@ -78,6 +79,7 @@ MSG_GENERIC_ERROR = "❌ Kutilmagan xatolik yuz berdi. Iltimos, birozdan keyin q
 MSG_FILE_ERROR = "❌ Faylni ögirişda xatolik. Fayl buzilmaganini tekşirib, qayta yuboring."
 MSG_TIMEOUT = "⌛️ Fayl juda uzoq işlandi. Kiçikroq qismlarga bölib yuboring."
 MSG_NOTHING = "Bu matnda ögiradigan narsa yöq — allaqaçon yangi alifboda ✅"
+MSG_NOTHING_CYR = "Bu matnda lotin harfi yöq — allaqaçon kirillda ✅"
 MSG_UNKNOWN_CMD = "Bunday buyruq yöq. Yordam: /help"
 MSG_OTHER = "Matn yoki Word / PDF / Excel / PowerPoint / .txt fayl yuboring. Yordam: /help"
 
@@ -96,7 +98,8 @@ def welcome_text(first_name: str | None) -> str:
         "⚙️ Pastdagi tugmalar bilan rejimni tanlang:\n"
         f"  • <b>{MODE_LABELS[MODE_CYR]}</b> — kirill matn uçun\n"
         f"  • <b>{MODE_LABELS[MODE_LAT]}</b> — eski lotin (oʻ, gʻ, sh, ch) uçun\n"
-        f"  • <b>{MODE_LABELS[MODE_AUTO]}</b> — ikkalasi aralaş bölsa\n\n"
+        f"  • <b>{MODE_LABELS[MODE_AUTO]}</b> — ikkalasi aralaş bölsa\n"
+        f"  • <b>{MODE_LABELS[MODE_TO_CYR]}</b> — lotinçadan kirillga\n\n"
         "Sinab köring: <code>Ўздаверлойиҳа</code> → <code>Özdavyerloyiha</code>"
     )
 
@@ -187,7 +190,8 @@ async def on_document(message: Message, bot: Bot) -> None:
 
         try:
             async with working(bot, message.chat.id):
-                caption = f"Yangi alifboda ✅  ·  {MODE_LABELS[mode]}"
+                done_label = "Kirillda ✅" if mode == MODE_TO_CYR else "Yangi alifboda ✅"
+                caption = f"{done_label}  ·  {MODE_LABELS[mode]}"
                 markup = await kb_for(message)
                 for i, out in enumerate(outputs):
                     await message.reply_document(FSInputFile(out), caption=caption if i == 0 else None,
@@ -223,14 +227,15 @@ async def on_text(message: Message, bot: Bot) -> None:
     result = convert(message.text, mode)
     if result == message.text:
         if private:                         # in groups stay silent instead of spamming
-            await message.reply(MSG_NOTHING, reply_markup=await kb_for(message))
+            await message.reply(MSG_NOTHING_CYR if mode == MODE_TO_CYR else MSG_NOTHING,
+                                reply_markup=await kb_for(message))
         return
     await stats.event("text")
     if len(result) <= TG_TEXT_LIMIT:
         await message.reply(result, parse_mode=None, reply_markup=await kb_for(message))
     else:
         await message.reply_document(
-            BufferedInputFile(result.encode("utf-8"), filename="yangi_alifbo.txt"),
+            BufferedInputFile(result.encode("utf-8"), filename="kirill.txt" if mode == MODE_TO_CYR else "yangi_alifbo.txt"),
             caption="Matn uzun bölgani uçun fayl holida.",
             reply_markup=await kb_for(message),
         )

@@ -29,6 +29,7 @@ from .prefs import get_mode
 from .ui import kb_for
 from .progress import working
 from .translit import MODE_AUTO, convert
+from .documents import out_tag
 
 log = logging.getLogger("uzlat-bot.ocr")
 router = Router(name="ocr")
@@ -234,13 +235,13 @@ async def ocr_and_reply(message: Message, bot: Bot, data: bytes, mime: str, stem
         return
 
     with tempfile.TemporaryDirectory() as tmp:
-        docx_path = Path(tmp) / f"{stem}_yangi.docx"
+        docx_path = Path(tmp) / f"{stem}_{out_tag(mode)}.docx"
         text_to_docx(text, docx_path)
         markup = await kb_for(message)
         await message.reply_document(FSInputFile(docx_path),
                                      caption=convert("📷 Rasmdan o'qildi va yangi alifboga o'girildi ✅"),
                                      reply_markup=markup)
-        await message.reply_document(BufferedInputFile(text.encode("utf-8"), filename=f"{stem}_yangi.txt"),
+        await message.reply_document(BufferedInputFile(text.encode("utf-8"), filename=f"{stem}_{out_tag(mode)}.txt"),
                                      reply_markup=markup)
     await _safe_delete(status)
 

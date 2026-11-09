@@ -25,7 +25,7 @@ from docx.oxml.ns import qn
 from .common import ConversionError, text_to_docx
 from .ooxml import check_package, convert_pptx_inplace, convert_xlsx_inplace
 from .pdf_inplace import convert_pdf_inplace
-from .translit import MODE_AUTO, convert, convert_chars
+from .translit import MODE_AUTO, MODE_TO_CYR, convert, convert_chars
 
 log = logging.getLogger("uzlat-bot.documents")
 
@@ -38,8 +38,13 @@ class NoTextInPDF(ConversionError):
     """The PDF has no text layer (a scan) — the caller may fall back to OCR."""
 
 
-def _out_name(stem: str, suffix: str) -> str:
-    return f"{stem}_yangi{suffix}"
+def out_tag(mode: str) -> str:
+    """File-name tag for results: _kirill for Latin->Cyrillic, _yangi otherwise."""
+    return "kirill" if mode == MODE_TO_CYR else "yangi"
+
+
+def _out_name(stem: str, suffix: str, mode: str = MODE_AUTO) -> str:
+    return f"{stem}_{out_tag(mode)}{suffix}"
 
 
 # ------------------------------------------------------------------ txt
@@ -57,7 +62,7 @@ def convert_txt(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
     if len(raw) > MAX_TXT_BYTES:
         raise ConversionError("Matn fayli juda katta (5 MB gaça).")
     text = _read_text(raw)
-    dst = out_dir / _out_name(src.stem, ".txt")
+    dst = out_dir / _out_name(src.stem, ".txt", mode)
     # line by line: bounded memory per call, identical result (rules never cross lines)
     dst.write_text("".join(convert(line, mode) for line in text.splitlines(keepends=True)),
                    encoding="utf-8")
@@ -112,7 +117,7 @@ def convert_docx(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
             part._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
     if doc.core_properties.title:
         doc.core_properties.title = convert(doc.core_properties.title, mode)
-    dst = out_dir / _out_name(src.stem, ".docx")
+    dst = out_dir / _out_name(src.stem, ".docx", mode)
     doc.save(str(dst))
     return [dst]
 
@@ -223,14 +228,14 @@ def convert_pdf(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
         raise NoTextInPDF("PDF içida matn topilmadi (skan qilingan bölişi mumkin).")
     converted = [convert(p, mode) for p in pages]
 
-    out_pdf = out_dir / _out_name(src.stem, ".pdf")
+    out_pdf = out_dir / _out_name(src.stem, ".pdf", mode)
     try:
         convert_pdf_inplace(src, out_pdf, mode)
     except Exception:
         log.exception("in-place PDF failed, falling back to a text PDF")
         _write_text_pdf(converted, out_pdf)
 
-    out_docx = out_dir / _out_name(src.stem, ".docx")
+    out_docx = out_dir / _out_name(src.stem, ".docx", mode)
     try:
         _pdf_to_docx(src, out_docx, mode)
     except Exception:
@@ -263,7 +268,7 @@ def convert_file(src: Path, out_dir: Path, mode: str = MODE_AUTO) -> list[Path]:
     if ext == ".pdf":
         return convert_pdf(src, out_dir, mode)
     if ext in (".xlsx", ".pptx"):
-        dst = out_dir / _out_name(src.stem, ext)
+        dst = out_dir / _out_name(src.stem, ext, mode)
         (convert_xlsx_inplace if ext == ".xlsx" else convert_pptx_inplace)(src, dst, mode)
         return [dst]
     raise ConversionError(f"Qöllab-quvvatlanmaydigan format: {ext}")
