@@ -23,6 +23,8 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from . import stats, storage
+from .translit import MODE_AUTO, MODES
+from .ui import keyboard
 
 log = logging.getLogger("uzlat-bot.admin")
 router = Router(name="admin")
@@ -130,6 +132,14 @@ async def on_broadcast_confirm(cb: CallbackQuery, bot: Bot) -> None:
     already = set(await storage.cmd("SMEMBERS", sent_key) or [])
     todo = [int(u) for u in users if u not in already]
     await cb.message.edit_text(f"⏳ Yuborilmoqda… 0 / {len(todo)}")
+    # every broadcast also refreshes the reply keyboard, so new buttons reach users who
+    # pressed /start long ago (each user keeps their own ✅ mode)
+    modes: dict[int, str] = {}
+    for k in range(0, len(todo), 500):
+        chunk = todo[k:k + 500]
+        got = await storage.pipeline([["GET", f"mode:{u}"] for u in chunk]) or []
+        for u, m in zip(chunk, got):
+            modes[u] = m if m in MODES else MODE_AUTO
 
     ok = fail = blocked = 0
     done_batch: list[int] = []
@@ -140,15 +150,18 @@ async def on_broadcast_confirm(cb: CallbackQuery, bot: Bot) -> None:
             await storage.pipeline([["SADD", sent_key, *done_batch], ["EXPIRE", sent_key, 7 * 24 * 3600]])
             done_batch.clear()
 
+    def kb(uid: int):
+        return keyboard(modes.get(uid, MODE_AUTO))
+
     for i, uid in enumerate(todo, 1):
         if time.monotonic() - started > TIME_BUDGET:
             break
         try:
             try:
-                await bot.copy_message(uid, from_chat, msg_id)
+                await bot.copy_message(uid, from_chat, msg_id, reply_markup=kb(uid))
             except TelegramRetryAfter as e:
                 await asyncio.sleep(e.retry_after + 1)
-                await bot.copy_message(uid, from_chat, msg_id)
+                await bot.copy_message(uid, from_chat, msg_id, reply_markup=kb(uid))
             ok += 1
             done_batch.append(uid)
         except TelegramForbiddenError:                 # user blocked the bot
